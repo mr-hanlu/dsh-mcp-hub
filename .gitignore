@@ -147,3 +147,8 @@ vite.config.ts.timestamp-*
 
 # Turbo Repo
 .turbo
+
+# MCP Hub local build artifacts
+lib/
+dist/
+*.DS_Store

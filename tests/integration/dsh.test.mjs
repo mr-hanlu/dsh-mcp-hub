@@ -1,0 +1,87 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { HubService } from '../../src/host/service.js';
+
+// Keep official Host packages outside the shipped plugin's dependency tree.
+const modules = process.env.DSH_TEST_MODULES;
+if (!modules) throw new Error('Set DSH_TEST_MODULES to a directory with official DSH 0.2.2 packages (see README).');
+const require = createRequire(join(modules, 'package.json'));
+const load = async name => import(pathToFileURL(require.resolve(name)).href);
+const { Context } = await load('@deepseek-ai/cordis');
+const { default: Loader } = await load('@deepseek-ai/cordis-plugin-loader');
+const { default: Manager } = await load('@deepseek-ai/dsh-mcp-manager');
+const { default: Tools } = await load('@deepseek-ai/dsh-tools');
+const { default: SystemPrompt } = await load('@deepseek-ai/dsh-system-prompt');
+const { default: Settings } = await load('@deepseek-ai/dsh-settings');
+const { default: ConfigEditor } = await load('@deepseek-ai/dsh-config-editor');
+const { initProfile, mountRootInclude, readProfilePatches } = await load('@deepseek-ai/dsh-app-boot');
+
+test('real DSH profile persists configuration, connects a local MCP, registers tools and disables it', { timeout: 30000 }, async () => {
+  const home = await mkdtemp(join(tmpdir(), 'mcp-hub-real-'));
+  const ctx = new Context();
+  try {
+    const dir = join(home, 'profile');
+    initProfile(dir, ['hub-test-bundle']);
+    const bundle = join(dir, 'node_modules', 'hub-test-bundle');
+    await mkdir(bundle, { recursive: true });
+    await writeFile(join(home,'package.json'), '{"name":"hub-test-installation"}');
+    await writeFile(join(bundle,'package.json'), JSON.stringify({name:'hub-test-bundle',version:'1.0.0',dsh:{bundle:{patch:'cordis.patch.yml'}}}));
+    await writeFile(join(bundle,'cordis.patch.yml'), JSON.stringify([{insert:[{id:'mcp-manager',name:'cordis:mcp-manager',config:{}}]}]));
+    await writeFile(join(dir,'cordis.yml'), '[]\n');
+    const server = join(home,'test-server.mjs');
+    await writeFile(server, `import {createInterface} from 'node:readline';
+const input=createInterface({input:process.stdin});
+input.on('line',line=>{const req=JSON.parse(line);if(req.id===undefined)return;
+let result;
+if(req.method==='initialize') {if(process.env.HUB_TEST_TOKEN!=='integration-value') {process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:req.id,error:{code:-32000,message:'missing token'}})+'\\n');return;}result={protocolVersion:req.params.protocolVersion,capabilities:{tools:{}},serverInfo:{name:'hub-fixture',version:'1.0.0'}};}
+else if(req.method==='tools/list')result={tools:[{name:'echo',description:'Integration test tool',inputSchema:{type:'object',properties:{text:{type:'string'}}}}]};
+else result={};
+process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:req.id,result})+'\\n');});`);
+    const profile={name:'test',dir,home,cwd:home,patchPath:join(dir,'cordis.patch.yml'),installAnchor:join(home,'package.json'),startedBundles:['hub-test-bundle'],overlays:[],telemetryDisabledEnv:undefined};
+    ctx.baseUrl=pathToFileURL(home).href+'/';
+    ctx.provide('profileContext',profile);
+    await ctx.plugin(SystemPrompt);
+    await ctx.plugin(Tools);
+    await ctx.plugin(Loader);
+    ctx.loader.builtins['mcp-manager']=Manager;
+    await ctx.plugin(ConfigEditor);
+    await ctx.plugin(Settings);
+    await mountRootInclude(ctx,join(dir,'cordis.yml'),readProfilePatches('test',profile));
+    await ctx.loader.await();
+    const service=await new HubService(ctx,{home,env:{...process.env,HUB_TEST_TOKEN:'integration-value'},metaPath:join(home,'sources.json'),waitMs:10000}).init();
+    const before=await service.list();
+    const tested=await service.test({name:'hubtest',entry:{transport:'stdio',command:process.execPath,args:[server],cwd:home,env:{HUB_TEST_TOKEN:'${env:HUB_TEST_TOKEN}'}}});
+    assert.equal(tested.ok,true,JSON.stringify(tested));
+    assert.equal((await service.list()).revision,before.revision);
+    assert.equal((await service.list()).servers.length,0);
+    assert.equal(ctx.tools.schemas().filter(tool=>tool.name.startsWith('mcp__hubtest__')).length,0);
+    const added=await service.mutate({action:'save',name:'hubtest',revision:before.revision,entry:{transport:'stdio',command:process.execPath,args:[server],cwd:home,env:{HUB_TEST_TOKEN:'${env:HUB_TEST_TOKEN}'}}});
+    assert.equal(added.ok,true,JSON.stringify(added));
+    const listing=await service.list();
+    assert.equal(listing.servers[0].status.state,'connected');
+    assert.equal(listing.servers[0].tools[0].name,'echo');
+    assert.deepEqual(listing.servers[0].entry.args,[server]);
+    assert.equal(service.reveal({originalName:'hubtest',field:'env',key:'HUB_TEST_TOKEN'}).value,'integration-value');
+    assert.ok(!JSON.stringify(listing).includes('integration-value'));
+    assert.match(await readFile(profile.patchPath,'utf8'),/hubtest/);
+    const duplicate = await service.parseFile({ filename:'mcp.json',text:JSON.stringify({mcpServers:{renamed:{command:process.execPath,args:[server],cwd:home,env:{HUB_TEST_TOKEN:'${env:HUB_TEST_TOKEN}'}}}}) });
+    assert.equal(duplicate.sources[0].candidates[0].duplicate,'hubtest');
+    await service.mutate({action:'toggle',name:'hubtest',enabled:false,revision:listing.revision});
+    const until=Date.now()+5000;
+    while(Date.now()<until && ctx.mcpManager.list()[0]?.status.state!=='disabled')await new Promise(resolve=>setTimeout(resolve,25));
+    assert.equal(ctx.mcpManager.list()[0].status.state,'disabled');
+    assert.equal(ctx.tools.schemas().filter(tool=>tool.name.startsWith('mcp__hubtest__')).length,0);
+    const disabled=await service.list();
+    const edited=await service.mutate({action:'save',name:'hubtest',originalName:'hubtest',revision:disabled.revision,entry:disabled.servers[0].entry});
+    assert.equal(edited.draft,true);
+    const afterEdit=await service.list();
+    assert.equal(afterEdit.servers[0].entry.enabled,false);
+    await service.mutate({action:'remove',name:'hubtest',revision:afterEdit.revision});
+    assert.equal((await service.sources()).sources[0].candidates[0].duplicate,undefined);
+  } finally { await ctx.fiber.dispose(); await rm(home,{recursive:true,force:true}); }
+});

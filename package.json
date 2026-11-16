@@ -1,0 +1,59 @@
+{
+  "name": "dsh-mcp-hub",
+  "version": "0.1.0",
+  "description": "DSH MCP 管理与本机配置导入",
+  "type": "module",
+  "license": "MIT",
+  "main": "src/host/index.js",
+  "exports": {
+    ".": "./src/host/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src/host",
+    "src/shared",
+    "lib",
+    "cordis.patch.yml",
+    "README.md",
+    "docs",
+    "LICENSE",
+    "icon.svg"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "dev": "node scripts/dev.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "test:integration": "node --test tests/integration/*.test.mjs",
+    "check": "node scripts/check.mjs"
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh-mcp-client": "0.2.2-rc.3",
+    "jsonc-parser": "^3.3.1",
+    "smol-toml": "^1.7.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh": ">=0.2.2-0 <0.3.0-0"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh": {
+      "optional": true
+    }
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-settings"
+      ]
+    }
+  }
+}
