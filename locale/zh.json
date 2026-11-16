@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "MCP Hub",
+    "description": "管理 DSH 的 MCP 服务：添加、启停、诊断，并从 Codex、Claude Code、OpenCode、Cursor 导入本机配置。"
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "MCP Hub",
+    "description": "Manage DSH MCP servers: add, enable, diagnose, and import existing configs from Codex, Claude Code, OpenCode, and Cursor."
+  }
+}

@@ -1,8 +1,34 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { Component, useEffect, useRef, useState } from 'react';
 import { parseEditorDocument } from '../shared/mcp-config.js';
+import { buildBackup } from '../shared/backup.js';
+import { isSecretKey } from '../shared/display.js';
 
 const MASK = '••••••••';
 const STATUS = { connected: ['已连接', 'good'], disabled: ['已停用', 'muted'], connecting: ['连接中', 'warn'], reconnecting: ['重连中', 'warn'], 'waiting-credentials': ['缺少凭证', 'warn'], failed: ['连接失败', 'bad'], closed: ['未连接', 'muted'] };
+// 官方 reason 是英文枚举，直接展示会让人看不懂。
+const REASON = { 'gave-up': '重连预算已耗尽，工具已撤回', 'reconnect-disabled': '重连已关闭，连接中断后不再恢复', 'unclosed-generation': '上次连接未确认关闭，已阻止替换', load: '启动失败', cleanup: '清理未完成，需要重启 DSH' };
+const MANAGED = { config: null, inherited: '继承配置', plugin: '插件注册', cleanup: '已删除，清理中', broken: '配置异常' };
+const isPlainObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+/** 字段级差异：只在来源配置与将要写入的配置之间比较，数组按整体比较。 */
+export function diffRows(from = {}, to = {}, path = []) {
+  const rows = [];
+  const keys = new Set([...Object.keys(from ?? {}), ...Object.keys(to ?? {})]);
+  for (const key of keys) {
+    const a = from?.[key], b = to?.[key];
+    if (isPlainObject(a) && isPlainObject(b)) { rows.push(...diffRows(a, b, path.concat(key))); continue; }
+    if (JSON.stringify(a) === JSON.stringify(b)) continue;
+    rows.push({ path: path.concat(key).join('.'), from: a, to: b });
+  }
+  return rows;
+}
+const showValue = value => value === undefined ? '（未设置）' : typeof value === 'string' ? (value === MASK ? '（已隐藏）' : value) : JSON.stringify(value);
+function download(name, text, type = 'application/json') {
+  const url = URL.createObjectURL(new Blob([text], { type }));
+  const anchor = document.createElement('a');
+  anchor.href = url; anchor.download = name;
+  document.body.append(anchor); anchor.click(); anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
 const ICONS = {
   plus: <path d="M12 5v14M5 12h14" />, refresh: <><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></>,
   chevron: <path d="m9 5 7 7-7 7"/>, search: <><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></>,
@@ -12,24 +38,49 @@ const ICONS = {
   import: <><path d="M12 3v12m-5-5 5 5 5-5M4 15v6h16v-6"/></>,
   folder: <path d="M3 6h7l2 3h9v11H3z"/>, arrow: <path d="M4 12h16m-6-6 6 6-6 6"/>,
   bolt: <path d="m13 2-9 12h7l-1 8 10-12h-7z"/>, info: <><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7v1"/></>,
+  pulse: <><path d="M3 12h4l2-6 3 12 2-6h5"/></>,
 };
 export function Icon({ name, size = 18, ...props }) { return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>{ICONS[name] ?? ICONS.box}</svg>; }
 const blank = () => ({ transport: 'stdio', command: '', args: [], env: {}, cwd: '', enabled: true });
 const textError = error => error.message || '操作失败，请重试';
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 export async function apiRequest(path, body, signal) {
-  const carrier = globalThis.__DSH_TRANSPORT__?.fetch;
-  const response = await (carrier ?? globalThis.fetch)('api/dsh-mcp-hub' + path, { method: body ? 'POST' : 'GET', headers: body ? { 'content-type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined, signal });
+  // 与第一方客户端一致：使用文档相对路径，浏览器与桌面页面都经同一条 /api 通道。
+  const response = await globalThis.fetch('api/dsh-mcp-hub' + path, { method: body ? 'POST' : 'GET', headers: body ? { 'content-type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined, signal });
   if (!response.ok) {
     let message = '无法连接 MCP Hub，请确认 Host 插件已启用';
-    try { message = (await response.json()).error || message; } catch {}
-    throw new Error(message);
+    let code;
+    try { const payload = await response.json(); message = payload.error || message; code = payload.code; } catch {}
+    const error = new Error(message);
+    error.code = code;
+    error.status = response.status;
+    throw error;
   }
   return response.json();
 }
 
+/** A crashed row or panel must not blank the whole settings entry. */
+class Boundary extends Component {
+  constructor(props) { super(props); this.state = { error: undefined }; }
+  static getDerivedStateFromError(error) { return { error }; }
+  render() {
+    if (!this.state.error) return this.props.children;
+    return <div className="hub-banner bad" role="alert"><Icon name="info"/><span>这个面板出错了：{this.state.error.message || '未知错误'}</span><button className="hub-text-button" onClick={() => this.setState({ error: undefined })}>重试</button></div>;
+  }
+}
+
 function Badge({ children, tone = '' }) { return <span className={'hub-badge ' + tone}>{children}</span>; }
-function Status({ status = {} }) { const [label, tone] = STATUS[status.state] ?? ['状态未知', 'muted']; return <span className={'hub-status ' + tone}><i />{label}</span>; }
+function Status({ status = {} }) { const [label, tone] = STATUS[status.state] ?? [`状态未知（${status.state ?? '无'}）`, 'muted']; return <span className={'hub-status ' + tone}><i />{label}</span>; }
+function StatusNote({ status = {}, verification }) {
+  if (verification?.state === 'verifying') return <span className="hub-note warn" role="status"><i className="hub-spinner"/>{verification.detail || '正在验证连接…'}</span>;
+  // 失败结论在「未连上」时始终可见——包括自动停用之后，否则用户只剩一条停用的服务而不知道原因。
+  if (verification?.state === 'failed' && status.state !== 'connected') return <span className="hub-note bad" role="alert">{status.state === 'disabled' ? '上次验证未通过：' : ''}{verification.detail || '连接验证未通过'}</span>;
+  if (status.state === 'reconnecting' && status.attempt != null) return <span className="hub-note warn">第 {status.attempt}/{status.maxAttempts ?? '?'} 次重试</span>;
+  if (status.state === 'waiting-credentials') return <span className="hub-note warn">缺少 DSH 凭证</span>;
+  if (status.state === 'failed' && status.reason) return <span className="hub-note bad">{REASON[status.reason] ?? status.reason}</span>;
+  return null;
+}
 function IconButton({ icon, label, className = '', ...props }) { return <button type="button" className={'hub-icon-button ' + className} title={label} aria-label={label} {...props}><Icon name={icon} /></button>; }
 function useDialog(onClose, busy = false) {
   const ref = useRef(null), close = useRef(onClose), pending = useRef(busy);
@@ -51,17 +102,32 @@ function useDialog(onClose, busy = false) {
   return ref;
 }
 
-function DeleteDialog({ server, busy, error, onCancel, onDelete }) {
+function ConfirmDialog({ title, description, confirmLabel, busy, error, onCancel, onConfirm }) {
   const ref = useDialog(onCancel, busy);
-  return <div className="hub-overlay"><section ref={ref} className="hub-dialog hub-confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="hub-delete-title" aria-describedby="hub-delete-description">
-    <header className="hub-dialog-header"><h2 id="hub-delete-title">删除 MCP 服务？</h2><IconButton icon="close" label="取消删除" disabled={busy} onClick={onCancel}/></header>
-    <div className="hub-dialog-body"><p id="hub-delete-description">将从 DSH 移除 <strong>{server.name}</strong> 的配置并断开连接。其他应用中的原始配置不受影响。</p>{error && <div className="hub-banner bad" role="alert">{error}</div>}</div>
-    <footer className="hub-dialog-footer"><div className="hub-actions"><button className="hub-button" onClick={onCancel} disabled={busy}>取消</button><button className="hub-button destructive" onClick={onDelete} disabled={busy}>{busy ? '删除中…' : '删除'}</button></div></footer>
+  return <div className="hub-overlay"><section ref={ref} className="hub-dialog hub-confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="hub-confirm-title" aria-describedby="hub-confirm-description">
+    <header className="hub-dialog-header"><h2 id="hub-confirm-title">{title}</h2><IconButton icon="close" label="取消" disabled={busy} onClick={onCancel}/></header>
+    <div className="hub-dialog-body"><p id="hub-confirm-description">{description}</p>{error && <div className="hub-banner bad" role="alert">{error}</div>}</div>
+    <footer className="hub-dialog-footer"><div className="hub-actions"><button className="hub-button" onClick={onCancel} disabled={busy}>取消</button><button className="hub-button destructive" onClick={onConfirm} disabled={busy}>{busy ? '处理中…' : confirmLabel}</button></div></footer>
   </section></div>;
+}
+
+function DeleteDialog({ server, busy, error, onCancel, onDelete }) {
+  return <ConfirmDialog title="删除 MCP 服务？" confirmLabel="删除" busy={busy} error={error} onCancel={onCancel} onConfirm={onDelete}
+    description={<>将从 DSH 移除 <strong>{server.name}</strong> 的配置并断开连接。</>}/>;
+}
+
+/**
+ * Render-local list identity: rows are keyed by name, so deleting a middle row no
+ * longer moves focus and controlled values to the wrong row.
+ */
+function useRowIds() {
+  const ids = useRef(new Map()), counter = useRef(0);
+  return key => { if (!ids.current.has(key)) ids.current.set(key, 'r' + (++counter.current)); return ids.current.get(key); };
 }
 
 function Pairs({ value = {}, onChange, label, field, variables = [], onReveal }) {
   const [revealed, setRevealed] = useState({}), [names, setNames] = useState({}), [error, setError] = useState('');
+  const idOf = useRowIds();
   const entries = Object.entries(value);
   const set = (key, val) => onChange({ ...value, [key]: val });
   async function show(key, val) {
@@ -77,19 +143,21 @@ function Pairs({ value = {}, onChange, label, field, variables = [], onReveal })
   }
   return <div className="hub-pairs"><div className="hub-field-caption">{label}<button type="button" className="hub-text-button" onClick={() => { let key = field === 'headers' ? 'Authorization' : 'NEW_VARIABLE'; while (Object.hasOwn(value,key)) key += '_'; onChange({...value,[key]:''}); }}>＋ 添加一项</button></div>
     {entries.map(([key,val],index) => {
-      const ref = val.match(/^(Bearer\s+)?(?:\$\{(env:|credential:)?([^}]*)\}|\{env:([^}]*)\})$/i);
+      const ref = String(val).match(/^(Bearer\s+)?(?:\$\{(env:|credential:)?([^}]*)\}|\{env:([^}]*)\})$/i);
       const prefix = ref?.[1] ?? '';
       const defaultPrefix = field === 'headers' && key.toLowerCase() === 'authorization' ? 'Bearer ' : '';
       const kind = ref ? ref[2] === 'credential:' ? 'credential' : 'env' : 'literal';
       const shown = ref ? ref[3] ?? ref[4] : val;
       const info = variables.find(row=>row.field === field && row.key === key);
-      return <div className="hub-variable-row" key={index}><div className="hub-pair">
+      // Written-out secrets deserve the same treatment as fetched ones.
+      const secret = kind === 'literal' && (isSecretKey(key) || /^(?:Bearer|Basic|Token)\s/i.test(String(val)));
+      return <div className="hub-variable-row" key={idOf(key)}><div className="hub-pair">
         <input aria-label={label+'名称 '+(index+1)} value={names[index] ?? key} placeholder="KEY" onChange={event=>setNames({...names,[index]:event.target.value})} onBlur={event=>rename(key,event.target.value.trim())}/>
         <select aria-label={label+'配置方式 '+(index+1)} value={kind} onChange={event=>set(key,event.target.value==='literal'?'':event.target.value==='env'?defaultPrefix+'${env:}':defaultPrefix+'${credential:}')}><option value="literal">直接填写</option><option value="env">环境变量引用</option><option value="credential">DSH 凭证引用</option></select>
-        <input aria-label={label+'值 '+(index+1)} type={kind==='literal'&&!revealed[key]?'password':'text'} value={shown} placeholder={kind==='literal'?'填写值':kind==='env'?'例如 GITHUB_TOKEN':'凭证名称'} autoComplete="off" onChange={event=>set(key,kind==='literal'?event.target.value:kind==='env'?prefix+'${env:'+event.target.value+'}':prefix+'${credential:'+event.target.value+'}')}/>
-        {kind==='literal' && <button type="button" className="hub-text-button" onClick={()=>revealed[key]?setRevealed({...revealed,[key]:false}):show(key,val)}>{revealed[key]?'隐藏':'显示'}</button>}
+        <input aria-label={label+'值 '+(index+1)} type={secret&&!revealed[key]?'password':'text'} value={shown} placeholder={kind==='literal'?'填写值':kind==='env'?'例如 GITHUB_TOKEN':'凭证名称'} autoComplete="off" onChange={event=>set(key,kind==='literal'?event.target.value:kind==='env'?prefix+'${env:'+event.target.value+'}':prefix+'${credential:'+event.target.value+'}')}/>
+        {secret && <button type="button" className="hub-text-button" onClick={()=>{ if(revealed[key]) { setRevealed({...revealed,[key]:false}); return; } if(String(val).includes(MASK)) { show(key,val); return; } setRevealed({...revealed,[key]:true}); }}>{revealed[key]?'隐藏':'显示'}</button>}
         <IconButton icon="close" label={'移除 '+key} onClick={()=>onChange(Object.fromEntries(entries.filter(([k])=>k!==key)))}/>
-      </div><small className={info?.state==='missing'?'bad':'hub-help'}>{info?.state==='missing'?'找不到引用：'+info.missing.join('、'):kind==='credential'?'由 DSH 凭证服务解析，连接时验证':kind==='env'?'保存时读取 DSH 运行环境中的变量':val.includes(MASK)?'已配置；保持原样将保留原值':val?'已填写':'未填写'}</small></div>;
+      </div><small className={info?.state==='missing'?'bad':'hub-help'}>{info?.state==='missing'?'找不到引用：'+info.missing.join('、'):info?.source?'已配置（来自 '+info.source+'）':kind==='credential'?'由 DSH 凭证服务解析，连接时验证':kind==='env'?'保存为 ${credential:…} 引用，连接时从 DSH 凭证服务读取':String(val).includes(MASK)?'已配置；保持原样将保留原值':val?'已填写':'未填写'}</small></div>;
     })}
     {!entries.length && <p className="hub-help">没有额外的{label}。</p>}{error && <p className="bad" role="alert">{error}</p>}
   </div>;
@@ -97,11 +165,12 @@ function Pairs({ value = {}, onChange, label, field, variables = [], onReveal })
 
 function Arguments({ value = [], onChange, onReveal }) {
   const [shown,setShown] = useState({}), [error,setError] = useState('');
+  const idOf = useRowIds();
   const sensitive = (arg,index) => arg.includes(MASK) || /^-.*(?:token|password|secret|key|authorization)/i.test(arg) || /^-.*(?:token|password|secret|key|authorization)/i.test(value[index-1] ?? '');
   async function reveal(index) { try { const next=[...value]; if(next[index].includes(MASK))next[index]=await onReveal('args',index);onChange(next);setShown({...shown,[index]:true}); } catch(error){setError(textError(error));} }
-  async function remove(index) { try { const next=await Promise.all(value.map((arg,i)=>arg.includes(MASK)?onReveal('args',i):arg));onChange(next.filter((_,i)=>i!==index)); }catch(error){setError(textError(error));} }
+  async function remove(index) { try { const next=await Promise.all(value.map((arg,i)=>arg.includes(MASK)?onReveal('args',i):arg));setShown({});onChange(next.filter((_,i)=>i!==index)); }catch(error){setError(textError(error));} }
   return <div className="hub-pairs"><div className="hub-field-caption">启动参数<button type="button" className="hub-text-button" onClick={()=>onChange([...value,''])}>＋ 添加参数</button></div>
-    {value.map((arg,index)=><div className="hub-argument" key={index}><span>{index+1}</span><input aria-label={'启动参数 '+(index+1)} type={sensitive(arg,index)&&!shown[index]?'password':'text'} value={arg} spellCheck="false" onChange={event=>onChange(value.map((v,i)=>i===index?event.target.value:v))}/>{sensitive(arg,index)&&<button type="button" className="hub-text-button" onClick={()=>shown[index]?setShown({...shown,[index]:false}):reveal(index)}>{shown[index]?'隐藏':'显示'}</button>}<IconButton icon="close" label={'删除参数 '+(index+1)} onClick={()=>remove(index)}/></div>)}
+    {value.map((arg,index)=><div className="hub-argument" key={idOf('a' + index)}><span>{index+1}</span><input aria-label={'启动参数 '+(index+1)} type={sensitive(arg,index)&&!shown[index]?'password':'text'} value={arg} spellCheck="false" onChange={event=>onChange(value.map((v,i)=>i===index?event.target.value:v))}/>{sensitive(arg,index)&&<button type="button" className="hub-text-button" onClick={()=>shown[index]?setShown({...shown,[index]:false}):reveal(index)}>{shown[index]?'隐藏':'显示'}</button>}<IconButton icon="close" label={'删除参数 '+(index+1)} onClick={()=>remove(index)}/></div>)}
     <p className="hub-help">每项是一个参数，空格和空参数会原样保留；仅隐藏疑似凭证。</p>{error&&<p className="bad" role="alert">{error}</p>}
   </div>;
 }
@@ -110,7 +179,7 @@ function Checks({ checks, busy, testing }) {
   return <div className="hub-checks" role="status">{checks.map((check, i) => <div className={'hub-check ' + (check.ok ? 'good' : 'bad')} key={i}><span className="hub-check-symbol">{check.ok ? '✓' : '!'}</span><div><strong>{check.label}</strong><p>{check.detail}</p></div></div>)}{busy && <div className="hub-check"><span className="hub-spinner"/><div><strong>{testing ? '正在测试连接' : '正在保存'}</strong><p>{testing ? '启动或连接 MCP，完成握手和工具发现后关闭测试连接；不保存配置。' : '保存配置并等待正式连接与工具注册…'}</p></div></div>}</div>;
 }
 
-function Editor({ draft, request, revision, onClose, onSaved }) {
+function Editor({ draft, request, revision, reloadRevision, onClose, onSaved }) {
   const [name, setName] = useState(draft.name ?? '');
   const [entry, setEntry] = useState(structuredClone(draft.entry ?? blank()));
   const [checks, setChecks] = useState([]);
@@ -124,6 +193,7 @@ function Editor({ draft, request, revision, onClose, onSaved }) {
   const appliedJson = useRef('');
   const appliedSelection = useRef('');
   const [error, setError] = useState('');
+  const [stale, setStale] = useState(false);
   const [acceptUnsupported, setAcceptUnsupported] = useState(false);
   const [mode, setMode] = useState('form');
   const [json, setJson] = useState('');
@@ -131,18 +201,22 @@ function Editor({ draft, request, revision, onClose, onSaved }) {
   const [variables, setVariables] = useState([]);
   const transportDrafts = useRef({});
   const [warnings, setWarnings] = useState([]);
+  const [willWrite, setWillWrite] = useState(null);
   const originalName = useRef(draft.originalName);
   const currentRevision = useRef(revision);
   const dialog = useRef(null);
-  const closeRef = useRef(onClose);
+  const onCloseRef = useRef(onClose);
+  const askCloseRef = useRef(null);
   const busyRef = useRef(busy);
-  closeRef.current = onClose;
+  onCloseRef.current = onClose;
+  const closeEditor = () => { if (busyRef.current) return; onCloseRef.current?.(); };
+  askCloseRef.current = closeEditor;
   busyRef.current = busy || reading > 0;
   useEffect(() => {
     const previous = document.activeElement;
     dialog.current?.querySelector('input,button')?.focus();
     const listener = event => {
-      if (event.key === 'Escape' && !busyRef.current) closeRef.current();
+      if (event.key === 'Escape' && !busyRef.current) askCloseRef.current?.();
       if (event.key !== 'Tab') return;
       const focusable = [...dialog.current.querySelectorAll('button:not(:disabled),input:not(:disabled),textarea:not(:disabled),select:not(:disabled),a[href]')];
       const first = focusable[0], last = focusable.at(-1);
@@ -156,7 +230,7 @@ function Editor({ draft, request, revision, onClose, onSaved }) {
     const rows = parseEditorDocument(text, originalName.current || name);
     const row = rows.length === 1 ? rows[0] : rows.find(row => row.name === selected);
     if (!row) throw new Error('JSON 包含多个服务，请先选择要添加的服务');
-    if (originalName.current && row.name && row.name !== originalName.current) throw new Error('编辑时请保持原服务名称；新服务请从添加入口导入');
+    if (originalName.current && row.name && ![originalName.current, name].includes(row.name)) throw new Error('编辑时请保持原服务名称；新服务请从添加入口导入');
     return { rows, row };
   }
   function applyJson(text, selected = jsonSelected) {
@@ -176,15 +250,16 @@ function Editor({ draft, request, revision, onClose, onSaved }) {
     const timer = setTimeout(() => applyJson(json), 250);
     return () => clearTimeout(timer);
   }, [json, mode, jsonSelected]);
-  const edit = (key, value) => { setEntry(current => ({ ...current, [key]: value })); setChecks([]); setVariables([]); };
+  const edit = (key, value) => { setEntry(current => ({ ...current, [key]: value })); setChecks([]); setVariables([]); setSaved(false); };
   async function submit(action) {
-    setBusy(true); setBusyAction(action); setError(''); setChecks([]);
+    setBusy(true); setBusyAction(action); setError(''); setStale(false); setChecks([]);
     try {
       let next = entry, nextName = name.trim(), issues = jsonIssues;
       if (mode === 'json') { const {row} = readJson(json); next = row.entry; issues = row.issues; if (appliedJson.current === json) next.enabled = entry.enabled; if (appliedJson.current !== json || !nextName) nextName = row.name || nextName; setEntry(next); setName(nextName); setJsonIssues(row.issues); }
       if ([...(draft.issues ?? []), ...issues].length && !acceptUnsupported) throw new Error('请先核对并确认不迁移的配置字段');
       const body = { action: 'save', name: nextName, entry: next, candidateId: originalName.current ? undefined : draft.candidateId, originalName: originalName.current, revision: currentRevision.current, acceptUnsupported, mode: next.enabled === false ? 'draft' : undefined };
       const result = await request(action === 'check' ? '/test' : '/mutate', body);
+      if (result.entry) setWillWrite(result.entry);
       setChecks(result.checks ?? []);
       setVariables(result.variables ?? []);
       if (action === 'check') { if (result.ok) setError(''); return; }
@@ -194,8 +269,16 @@ function Editor({ draft, request, revision, onClose, onSaved }) {
       }
       setWarnings(result.warnings ?? []);
       if (!result.ok && !result.draft && result.saved) setError('配置已保存，连接验证未通过。请补全后重试；可在已添加列表查看状态。');
-    } catch (error) { setError(textError(error)); }
+    } catch (error) {
+      setError(textError(error));
+      if (error.code === 'REVISION_CONFLICT') setStale(true);
+    }
     finally { setBusy(false); setBusyAction(''); }
+  }
+  /** Pull the freshly read revision into this dialog instead of closing and losing edits. */
+  async function resync() {
+    try { const latest = await reloadRevision(); currentRevision.current = latest; setStale(false); setError('已同步到最新版本，请再次点击保存'); }
+    catch (error) { setError(textError(error)); }
   }
   async function reveal(field, key) {
     setReading(count => count + 1);
@@ -206,48 +289,66 @@ function Editor({ draft, request, revision, onClose, onSaved }) {
   }
   const transport = entry.transport;
   return <div className="hub-overlay"><section ref={dialog} className="hub-dialog" role="dialog" aria-modal="true" aria-labelledby="hub-editor-title">
-    <header className="hub-dialog-header"><div><h2 id="hub-editor-title">{draft.originalName ? '编辑 MCP 服务' : '添加 MCP 服务'}</h2></div><IconButton icon="close" label="关闭配置窗口" onClick={onClose} disabled={busy || reading > 0}/></header>
+    <header className="hub-dialog-header"><div><h2 id="hub-editor-title">{draft.originalName ? '编辑 MCP 服务' : '添加 MCP 服务'}</h2></div><IconButton icon="close" label="关闭配置窗口" onClick={() => onCloseRef.current?.()} disabled={busy || reading > 0}/></header>
     <div className="hub-dialog-body">
-      {draft.source && <div className="hub-source-note"><Icon name="import"/><div>从 {draft.source} 导入<code>{draft.sourcePath}</code><small>配置复制到 DSH 后独立管理</small></div></div>}
+      {draft.source && <div className="hub-source-note"><Icon name="import"/><div>从 {draft.source} 导入<code>{draft.sourcePath}</code><small>{draft.detail ? '项目级配置 · ' + draft.detail : '配置复制到 DSH 后独立管理'}</small></div></div>}
+      {willWrite && (() => {
+        const rows = draft.sourcePath ? diffRows(draft.entry ?? {}, willWrite) : [];
+        return <details className="hub-willwrite"><summary>将写入 DSH 的配置{rows.length ? `（${rows.length} 处与来源不同）` : ''}</summary>
+          {rows.length > 0 && <ul>{rows.slice(0, 12).map(row => <li key={row.path}><code>{row.path}</code><span>{showValue(row.from)} → {showValue(row.to)}</span></li>)}</ul>}
+          {rows.length > 12 && <p className="hub-help">另有 {rows.length - 12} 处差异，见下方完整配置。</p>}
+          <pre>{JSON.stringify(willWrite, null, 2)}</pre>
+          <p className="hub-help">凭据按字段名遮蔽；引用保存为 $&#123;credential:…&#125;，由 DSH 凭证服务在连接时解析。</p>
+        </details>;
+      })()}
       <div className="hub-editor-modes"><button type="button" className={mode === 'form' ? 'active' : ''} disabled={busy || reading > 0} onClick={() => { if (mode === 'json') { if (applyJson(json)) { setMode('form'); setError(''); } } }}>表单配置</button><button type="button" className={mode === 'json' ? 'active' : ''} disabled={busy || reading > 0} onClick={() => { setJson(JSON.stringify(entry, null, 2)); setMode('json'); }}>JSON 编辑</button></div>
       <fieldset disabled={busy || reading > 0} className="hub-fields">
-        <label className="hub-field">服务名称<input value={name} disabled={!!originalName.current} onChange={event => { setName(event.target.value); setChecks([]); }} placeholder="例如 context7"/><small>字母、数字、下划线或连字符，最多 32 位</small></label>
+        <label className="hub-field">服务名称<input value={name} onChange={event => { setName(event.target.value); setChecks([]); setSaved(false); }} placeholder="例如 context7"/><small>字母、数字、下划线或连字符，最多 32 位；改名会在保存后重建连接</small></label>
         {mode === 'json' ? <div className="hub-json-config">{jsonRows.length > 1 && <label className="hub-field">选择服务<select aria-label="选择 JSON 服务" value={jsonSelected} onChange={event=>{setJsonSelected(event.target.value);applyJson(json,event.target.value);}}><option value="">请选择一个服务</option>{jsonRows.map(row=><option key={row.name} value={row.name}>{row.name}</option>)}</select></label>}<label className="hub-field">服务器配置<textarea aria-label="JSON 配置" className="hub-json-editor" value={json} onChange={event => { setJson(event.target.value); setChecks([]); }} spellCheck="false"/><small>支持单个配置、&#123;服务名: 配置&#125;、mcpServers 格式；服务名和连接方式会自动识别。</small></label>{jsonError ? <p className="bad" role="alert">{jsonError}</p> : jsonRows.length > 0 && <p className="hub-help" role="status">已识别 {name || '未命名服务'} · {entry.transport} · {Object.keys(entry.env ?? {}).length} 项环境变量</p>}</div> : <>
           <label className="hub-field">连接方式<select value={transport} onChange={event => { const t = event.target.value; transportDrafts.current[entry.transport] = entry; setEntry({ ...(transportDrafts.current[t] ?? (t === 'stdio' ? blank() : { transport: t, url: '', headers: {} })), enabled: entry.enabled }); setChecks([]); setVariables([]); }}>{!['stdio','streamable-http'].includes(transport) && <option value={transport}>{transport}（暂不支持）</option>}<option value="stdio">stdio · 本地命令</option><option value="streamable-http">Streamable HTTP · 远程服务</option></select></label>
           {transport === 'stdio' ? <>
             <label className="hub-field">启动命令<input value={entry.command ?? ''} onChange={event => edit('command', event.target.value)} placeholder="npx、uvx 或可执行文件的绝对路径"/></label>
             <Arguments value={entry.args} onChange={value => edit('args', value)} onReveal={reveal}/>
-            <label className="hub-field">工作目录 <span className="hub-optional">可选</span><input value={entry.cwd ?? ''} onChange={event => edit('cwd', event.target.value)} placeholder="留空使用 DSH 工作目录"/></label>
+            <label className="hub-field">工作目录 <span className="hub-optional">可选</span><input value={entry.cwd ?? ''} onChange={event => edit('cwd', event.target.value)} placeholder="留空由 DSH 决定"/></label>
             <Pairs label="环境变量" field="env" value={entry.env} variables={variables} onReveal={reveal} onChange={value => edit('env', value)}/>
           </> : <><label className="hub-field">服务地址<input value={entry.url ?? ''} onChange={event => edit('url', event.target.value)} placeholder="https://example.com/mcp"/><small>地址中的凭证已隐藏，修改地址时请填写完整新地址。</small></label><Pairs label="请求头" field="headers" value={entry.headers} variables={variables} onReveal={reveal} onChange={value => edit('headers', value)}/></>}
         </>}
         {!![...(draft.issues ?? []), ...jsonIssues].length && <div className="hub-compatibility"><strong>有配置需要核对</strong><ul>{[...new Set([...(draft.issues ?? []), ...jsonIssues])].map(issue => <li key={issue}>{issue}</li>)}</ul><label><input type="checkbox" checked={acceptUnsupported} onChange={event => setAcceptUnsupported(event.target.checked)}/>我已核对，确认不迁移上述不支持的字段</label></div>}
       </fieldset>
-      <label className="hub-enable-field"><input type="checkbox" checked={entry.enabled !== false} disabled={busy || reading > 0} onChange={event => edit('enabled', event.target.checked)}/>启用此服务<span className="hub-help">停用时仅保存配置</span></label>
       <Checks checks={checks} busy={busy} testing={busyAction === 'check'}/>
-      {error && <div className="hub-banner warn" role="alert">{error}</div>}
+      {error && <div className="hub-banner warn" role="alert">{error}{stale && <button className="hub-text-button" onClick={resync}>同步最新版本</button>}</div>}
       {warnings.map(warning => <div className="hub-banner warn" key={warning}>{warning}</div>)}
 
     </div>
-    <footer className="hub-dialog-footer"><span className="hub-help">{saved ? '配置已保存，可修正后重试' : entry.enabled === false ? '保存配置，保持停用' : '保存后验证正式连接'}</span><div className="hub-actions"><button className="hub-button" disabled={busy || reading > 0} onClick={onClose}>取消</button><button className="hub-button" disabled={busy || reading > 0} onClick={() => submit('check')}>{busy && busyAction === 'check' ? '测试中…' : '测试连接'}</button><button className="hub-button primary" disabled={busy || reading > 0} onClick={() => submit('save')}>{busy && busyAction !== 'check' ? '保存中…' : draft.originalName ? '保存' : '添加'}</button></div></footer>
+    <footer className="hub-dialog-footer"><span className="hub-help">{saved ? '配置已保存，可修正后重试' : entry.enabled === false ? '保存配置，保持停用' : '保存后验证正式连接'}</span><div className="hub-actions"><button className="hub-button" disabled={busy || reading > 0} onClick={() => onCloseRef.current?.()}>取消</button><button className="hub-button" disabled={busy || reading > 0} onClick={() => submit('check')}>{busy && busyAction === 'check' ? '测试中…' : '测试连接'}</button><button className="hub-button primary" disabled={busy || reading > 0} onClick={() => submit('save')}>{busy && busyAction !== 'check' ? '保存中…' : draft.originalName ? '保存' : '添加'}</button></div></footer>
   </section></div>;
 }
 
-function ServerRow({ server, busy, onEdit, onAction }) {
+function ServerRow({ server, busy, detail, detailLoading, onLoadTools, onEdit, onAction }) {
   const [open, setOpen] = useState(false);
   const [detailTab, setDetailTab] = useState('tools');
   const [query, setQuery] = useState('');
-  const { name, entry, status, source, tools } = server;
+  const { name, entry, status, source, tools, verification } = server;
   const connected = status.state === 'connected';
+  const managed = server.managed ?? (server.editable ? 'config' : 'plugin');
+  const verifying = verification?.state === 'verifying';
+  const signature = `${status.connectedAt ?? ''}:${status.toolCount ?? ''}`;
+  // Tool parameter schemas are large: fetch them only for the row the user opened.
+  useEffect(() => {
+    if (!open || detailTab !== 'tools' || !connected) return;
+    void onLoadTools(name, signature);
+  }, [open, detailTab, connected, name, signature]);
+  const rows = detail?.tools ?? tools;
+  const loading = detailLoading && !detail;
   return <article className={'hub-server ' + (open ? 'expanded' : '')}>
     <div className="hub-server-top"><button type="button" className="hub-expand-button" aria-expanded={open} aria-label={(open ? '收起 ' : '展开 ') + name} onClick={() => setOpen(!open)}><Icon name="chevron" className={open ? 'rotated' : ''}/></button>
-      <span className="hub-avatar">{name.slice(0, 1).toUpperCase()}</span><button type="button" className="hub-server-name" onClick={() => setOpen(!open)} aria-expanded={open}><strong>{name}</strong><span><Status status={status}/><Badge>{connected ? tools.length : '—'} 个工具</Badge><Badge>{entry?.transport === 'stdio' ? 'stdio' : entry?.transport === 'streamable-http' ? 'HTTP' : '插件管理'}</Badge><span className="hub-origin">{source?.app}</span></span></button>
-      <div className="hub-actions"><IconButton icon="edit" label={'编辑 ' + name} disabled={!server.editable || busy} onClick={() => onEdit(server)}/><IconButton icon="refresh" label={'重启 ' + name} disabled={status.state === 'disabled' || !server.editable || busy} onClick={() => onAction('restart', server)}/><IconButton icon="trash" label={'删除 ' + name} className="danger" disabled={!server.removable || busy} onClick={() => onAction('remove', server)}/><button type="button" className="hub-switch" role="switch" aria-label={'启用 ' + name} aria-checked={entry?.enabled !== false && !!entry} disabled={!server.editable || busy} onClick={() => onAction('toggle', server)}><span/></button></div>
+      <span className="hub-avatar">{name.slice(0, 1).toUpperCase()}</span><button type="button" className="hub-server-name" onClick={() => setOpen(!open)} aria-expanded={open}><strong>{name}</strong><span><Status status={status}/><Badge>{connected ? (status.toolCount ?? tools.length) : '—'} 个工具</Badge>{MANAGED[managed] && <Badge>{MANAGED[managed]}</Badge>}{!MANAGED[managed] && <Badge>{entry?.transport === 'stdio' ? 'stdio' : entry?.transport === 'streamable-http' ? 'HTTP' : '插件管理'}</Badge>}<span className="hub-origin">{source?.app}</span><StatusNote status={status} verification={verification}/></span></button>
+      <div className="hub-actions">{verifying && <IconButton icon="close" label={'取消验证 ' + name} disabled={busy} onClick={() => onAction('cancel', server)}/>}<IconButton icon="edit" label={'编辑 ' + name} disabled={!server.editable || busy} onClick={() => onEdit(server)}/><IconButton icon="refresh" label={'重启 ' + name} disabled={status.state === 'disabled' || !server.editable || busy} onClick={() => onAction('restart', server)}/><IconButton icon="trash" label={'删除 ' + name} className="danger" disabled={!server.removable || busy} onClick={() => onAction('remove', server)}/><button type="button" className="hub-switch" role="switch" aria-label={'启用 ' + name} aria-checked={entry?.enabled !== false && !!entry} disabled={!server.editable || busy} onClick={() => onAction('toggle', server)}><span/></button></div>
     </div>
-    {open && <div className="hub-server-details"><div className="hub-detail-tabs">{[['tools','工具'],['config','配置'],['diagnostics','诊断']].map(([id,label]) => <button type="button" key={id} className={id === detailTab ? 'active' : ''} onClick={() => setDetailTab(id)}>{label}{id === 'tools' && <small>{tools.length}</small>}</button>)}</div>
-      {detailTab === 'tools' && <div className="hub-tools"><div className="hub-detail-heading"><span>服务提供的工具</span>{tools.length > 3 && <input aria-label={'搜索 ' + name + ' 的工具'} value={query} onChange={event => setQuery(event.target.value)} placeholder="搜索工具…"/>}</div>{!tools.length && <p className="hub-help">{connected ? '此服务暂未提供工具。' : '服务连接成功后，这里将显示可用工具。'}</p>}{tools.filter(tool => (tool.name + tool.description).toLowerCase().includes(query.toLowerCase())).map(tool => <details className="hub-tool" key={tool.name}><summary><Icon name="bolt" size={15}/><code>{tool.name}</code><Icon name="chevron" size={14}/></summary><p>{tool.description || '无描述'}</p><pre>{JSON.stringify(tool.schema, null, 2)}</pre></details>)}</div>}
-      {detailTab === 'config' && <div className="hub-config"><div className="hub-definition"><span>配置归属</span><strong>{server.editable ? 'DSH 全局配置' : '由其他插件管理'}</strong><span>导入来源</span><strong>{source?.app ?? 'DSH'}</strong>{source?.path && <><span>来源文件</span><code>{source.path}</code></>}</div><pre>{JSON.stringify(entry, null, 2)}</pre><p className="hub-help">凭证已隐藏；普通启动参数按原值显示。</p></div>}
-      {detailTab === 'diagnostics' && <div className="hub-diagnostics"><Status status={status}/><p>{status.lastError || (connected ? '服务已连接，工具已同步到 DSH。' : status.state === 'disabled' ? '配置已保留，启用后开始连接。' : '请检查运行环境、变量和认证配置。')}</p>{status.reason && <code>{status.reason}</code>}</div>}
+    {open && <div className="hub-server-details"><div className="hub-detail-tabs">{[['tools','工具'],['config','配置'],['diagnostics','诊断']].map(([id,label]) => <button type="button" key={id} className={id === detailTab ? 'active' : ''} onClick={() => setDetailTab(id)}>{label}{id === 'tools' && <small>{status.toolCount ?? tools.length}</small>}</button>)}</div>
+      {detailTab === 'tools' && <div className="hub-tools"><div className="hub-detail-heading"><span>服务提供的工具</span>{rows.length > 3 && <input aria-label={'搜索 ' + name + ' 的工具'} value={query} onChange={event => setQuery(event.target.value)} placeholder="搜索工具…"/>}</div>{loading && <p className="hub-help" role="status"><i className="hub-spinner"/>正在读取工具参数…</p>}{!rows.length && !loading && <p className="hub-help">{connected ? '此服务暂未提供工具。' : '服务连接成功后，这里将显示可用工具。'}</p>}{rows.filter(tool => (tool.name + tool.description).toLowerCase().includes(query.toLowerCase())).map(tool => <details className="hub-tool" key={tool.fullName ?? tool.name}><summary><Icon name="bolt" size={15}/><code>{tool.name}</code><Icon name="chevron" size={14}/></summary><p>{tool.description || '无描述'}</p>{tool.schema ? <pre>{JSON.stringify(tool.schema, null, 2)}</pre> : <p className="hub-help">展开后加载参数 Schema。</p>}</details>)}</div>}
+      {detailTab === 'config' && <div className="hub-config"><div className="hub-definition"><span>配置归属</span><strong>{MANAGED[managed] ?? 'DSH 全局配置'}</strong><span>导入来源</span><strong>{source?.app ?? 'DSH'}</strong>{source?.path && <><span>来源文件</span><code>{source.path}</code></>}</div><pre>{JSON.stringify(entry, null, 2)}</pre><p className="hub-help">凭据按字段名隐藏；普通环境变量与启动参数按原值显示。</p></div>}
+      {detailTab === 'diagnostics' && <div className="hub-diagnostics"><div className="hub-detail-heading"><span>连接诊断</span><Status status={status}/></div><StatusNote status={status} verification={verification}/><p>{status.lastError || (connected ? '服务已连接，工具已同步到 DSH。' : status.state === 'disabled' ? '配置已保留，启用后开始连接。' : '请检查运行环境、变量和认证配置。')}</p><div className="hub-definition">{status.reason && <><span>停止原因</span><strong>{REASON[status.reason] ?? status.reason}</strong></>}{status.attempt != null && <><span>重试次数</span><strong>{status.attempt}/{status.maxAttempts ?? '?'}</strong></>}{!!status.nextRetryAtMs && <><span>下次重试</span><strong>{new Date(status.nextRetryAtMs).toLocaleTimeString()}</strong></>}{status.closeConfirmed === false && <><span>连接清理</span><strong className="bad">未确认关闭</strong></>}{!!status.cleanupError && <><span>清理错误</span><strong className="bad">{status.cleanupError}</strong></>}{verification?.finishedAt && <><span>最近一次验证</span><strong className={verification.state === 'ok' ? 'good' : verification.state === 'failed' ? 'bad' : 'muted'}>{verification.detail ?? verification.state}</strong></>}{entry && <><span>复诊</span><button className="hub-text-button" disabled={busy} onClick={() => onAction('probe', server)}>现在复诊（不影响运行中的实例）</button></>}</div></div>}
     </div>}
   </article>;
 }
@@ -277,7 +378,7 @@ function Sources({ sources, scanning, scanError, onScan, onImport }) {
         </button>
         {open && <div className="hub-source-content">{candidates.map(candidate => <div className="hub-candidate" key={candidate.id}>
           <span className="hub-candidate-icon"><Icon name="box"/></span>
-          <div className="hub-candidate-info"><strong>{candidate.name}</strong><span>{candidate.entry.transport === 'stdio' ? '本地命令' : '远程服务'}<i>·</i>{candidate.entry.transport === 'stdio' ? candidate.entry.command : candidate.entry.url}</span>{candidate.nameConflict && <small className="warn">名称冲突，添加时需要修改名称</small>}{!!candidate.issues.length && <small className="warn">有 {candidate.issues.length} 项配置需要核对</small>}{candidate.duplicateSource && <small>也发现于 {candidate.duplicateSource}</small>}</div>
+          <div className="hub-candidate-info"><strong>{candidate.name}</strong><span>{candidate.entry.transport === 'stdio' ? '本地命令' : '远程服务'}<i>·</i>{candidate.entry.transport === 'stdio' ? candidate.entry.command : candidate.entry.url}</span>{candidate.detail && <small>项目级 · {candidate.detail}</small>}{candidate.nameConflict && <small className="warn">名称冲突，添加时需要修改名称</small>}{!!candidate.issues.length && <small className="warn">有 {candidate.issues.length} 项配置需要核对</small>}{candidate.duplicateSource && <small>也发现于 {candidate.duplicateSource}</small>}</div>
           {candidate.duplicate ? <span className="hub-already"><Icon name="check" size={15}/>已添加 · {candidate.duplicate}</span> : <button className="hub-button" onClick={() => onImport(candidate)}><Icon name="plus" size={16}/>添加</button>}
         </div>)}</div>}
       </article>;
@@ -302,6 +403,7 @@ export function App({ request = apiRequest, preview = false }) {
   const [draft, setDraft] = useState(null);
   const [confirm, setConfirm] = useState(null);
   const [busy, setBusy] = useState('');
+  const [toolDetails, setToolDetails] = useState({});
   const fileInput = useRef(null);
   const alive = useRef(true);
   const generation = useRef(0);
@@ -310,18 +412,74 @@ export function App({ request = apiRequest, preview = false }) {
   const sourceGeneration = useRef(0);
   const initialScanStarted = useRef(false);
   const scanningTask = useRef(null);
+  const version = useRef(0);
+  const revision = useRef(-1);
+  const dataRef = useRef(null);
+  useEffect(() => { dataRef.current = data; }, [data]);
   async function refresh(quiet = false) {
     const id = ++generation.current;
     if (!quiet) setLoading(true);
-    try { const next = await request('/servers'); if (alive.current && id === generation.current) { setData(next); setLoadError(''); if (sourcesLoaded.current && sourceRevision.current !== next.revision) await syncSources(next.revision); } return next; }
+    try {
+      const next = await request('/servers');
+      if (alive.current && id === generation.current) {
+        setData(next); setLoadError('');
+        version.current = next.version ?? version.current + 1;
+        revision.current = next.revision;
+        if (sourcesLoaded.current && sourceRevision.current !== next.revision) await syncSources(next.revision);
+      }
+      return next;
+    }
     catch (error) { if (alive.current && id === generation.current) setLoadError(textError(error)); throw error; }
     finally { if (alive.current && id === generation.current) setLoading(false); }
+  }
+  /** Merge status-only rows into the loaded list; the entries and tool summaries stay put. */
+  function mergeStatus(rows) {
+    setData(current => {
+      if (!current) return current;
+      const byName = new Map(rows.map(row => [row.name, row]));
+      const servers = current.servers.map(server => {
+        const row = byName.get(server.name);
+        if (!row) return server;
+        const { name, editable, verification, ...status } = row;
+        return { ...server, status, verification, editable: editable ?? server.editable };
+      });
+      return { ...current, servers };
+    });
+  }
+  function applySnapshot(snapshot) {
+    if (!snapshot) return;
+    version.current = snapshot.version ?? version.current;
+    if (snapshot.revision !== revision.current) { refresh(true).catch(() => {}); return; }
+    const current = dataRef.current;
+    // The initial `refresh()` owns the first load; only reload on a real shape change.
+    if (!current) return;
+    if ((snapshot.servers ?? []).length !== current.servers.length
+      || (snapshot.servers ?? []).some(row => !current.servers.some(server => server.name === row.name))) {
+      refresh(true).catch(() => {});
+      return;
+    }
+    mergeStatus(snapshot.servers ?? []);
   }
   useEffect(() => {
     alive.current = true;
     refresh().catch(() => {});
-    const timer = setInterval(() => { if (!document.hidden) refresh(true).catch(() => {}); }, 4000);
-    return () => { alive.current = false; clearInterval(timer); };
+    // Long-poll instead of a fixed interval: the Host answers as soon as a status,
+    // a verification, or the configuration revision changes.
+    const controller = new AbortController();
+    let cancelled = false;
+    (async () => {
+      while (!cancelled && alive.current) {
+        try {
+          const snapshot = await request('/wait', { version: version.current, revision: revision.current, timeoutMs: 20000 }, controller.signal);
+          if (cancelled || !alive.current) return;
+          applySnapshot(snapshot);
+        } catch (error) {
+          if (cancelled || error?.name === 'AbortError') return;
+          await sleep(2000);
+        }
+      }
+    })();
+    return () => { cancelled = true; controller.abort(); alive.current = false; };
   }, [request]);
   useEffect(() => {
     if (!notice || noticePaused) return;
@@ -329,9 +487,9 @@ export function App({ request = apiRequest, preview = false }) {
     return () => clearTimeout(timer);
   }, [notice, noticePaused]);
   function notify(text, tone = 'good') { setNoticePaused(false); setNotice({text,tone,id:Date.now()}); }
-  async function syncSources(revision) {
+  async function syncSources(nextRevision) {
     const id = ++sourceGeneration.current;
-    try { const result = await request('/sources'); if (alive.current && id === sourceGeneration.current) { setSources(result.sources); setScanError(''); sourceRevision.current = revision; } }
+    try { const result = await request('/sources'); if (alive.current && id === sourceGeneration.current) { setSources(result.sources); setScanError(''); sourceRevision.current = nextRevision; } }
     catch(error) { if(alive.current) setScanError('导入状态更新失败，请重新扫描后重试'); }
   }
   const hostReady = Boolean(data);
@@ -344,9 +502,9 @@ export function App({ request = apiRequest, preview = false }) {
     if (scanningTask.current) return scanningTask.current;
     setScanning(true); setScanError('');
     const task = (async () => {
-      try { const result = await request('/scan', {}); if (alive.current) { setSources(result.sources); sourcesLoaded.current = true; sourceRevision.current = data?.revision; } }
+      try { const result = await request('/scan', {}); if (alive.current) { setSources(result.sources); sourcesLoaded.current = true; sourceRevision.current = revision.current; } }
       catch (error) { if (alive.current) setScanError(textError(error)); }
-      finally { if (alive.current) setScanning(false); scanningTask.current = null; }
+      finally { if (alive.current) { setScanning(false); scanningTask.current = null; } }
     })();
     scanningTask.current = task;
     return task;
@@ -363,8 +521,41 @@ export function App({ request = apiRequest, preview = false }) {
     } catch (error) { setError(textError(error)); }
     finally { setScanning(false); }
   }
+  async function loadTools(name, signature) {
+    const cached = toolDetails[name];
+    if (cached?.signature === signature && cached.tools) return;
+    if (cached?.loading === signature) return;
+    setToolDetails(current => ({ ...current, [name]: { ...current[name], loading: signature } }));
+    try {
+      const result = await request('/tools', { name });
+      if (!alive.current) return;
+      setToolDetails(current => ({ ...current, [name]: { signature, tools: result.tools } }));
+    } catch (error) {
+      if (!alive.current) return;
+      setToolDetails(current => ({ ...current, [name]: { ...current[name], loading: undefined } }));
+      setError(textError(error));
+    }
+  }
   async function action(action, server, confirmed = false) {
     if (action === 'remove' && !confirmed) { setDeleteError(''); setConfirm(server); return; }
+    if (action === 'cancel') {
+      setBusy(server.name); setError('');
+      try { await request('/cancel', { name: server.name }); await refresh(true); notify('已取消 ' + server.name + ' 的验证'); }
+      catch (error) { setError(textError(error)); }
+      finally { setBusy(''); }
+      return;
+    }
+    if (action === 'probe') {
+      setBusy(server.name); setError('');
+      try {
+        const result = await request('/probe', { name: server.name });
+        await refresh(true);
+        const failed = (result.checks ?? []).find(check => !check.ok);
+        notify(failed ? server.name + ' 复诊未通过：' + failed.detail : server.name + ' 复诊通过', failed ? 'bad' : 'good');
+      } catch (error) { setError(textError(error)); }
+      finally { setBusy(''); }
+      return;
+    }
     setBusy(server.name); setError(''); setDeleteError(''); setNotice(null);
     try {
       await request('/mutate', { action, name: server.name, revision: data.revision, enabled: server.entry?.enabled === false });
@@ -373,27 +564,48 @@ export function App({ request = apiRequest, preview = false }) {
     } catch (error) { if(action === 'remove')setDeleteError(textError(error));else setError(textError(error)); }
     finally { setBusy(''); }
   }
+  /** One click for "everything failed after a network change": restart each broken server. */
+  async function restartFailed() {
+    const targets = servers.filter(server => server.editable && ['failed', 'waiting-credentials', 'reconnecting'].includes(server.status.state)).map(server => server.name);
+    if (!targets.length) { notify('没有需要重连的服务', 'muted'); return; }
+    setBusy('bulk'); setError('');
+    try {
+      const result = await request('/mutate', { action: 'bulk', operation: 'restart', names: targets, revision: data.revision });
+      await refresh(true);
+      notify(`已请求重连 ${result.affected} 个服务`);
+    } catch (error) { setError(textError(error)); }
+    finally { setBusy(''); }
+  }
+  function exportConfig() {
+    const { backup, omitted } = buildBackup(servers);
+    const count = Object.keys(backup).length;
+    if (!count) { notify('没有可导出的配置', 'muted'); return; }
+    download('mcp-hub-backup-' + new Date().toISOString().slice(0, 10) + '.json', JSON.stringify({ format: 'dsh-mcp-hub-backup', version: 1, exportedAt: new Date().toISOString(), servers: backup }, null, 2));
+    notify(omitted.length ? `已导出 ${count} 个服务；${omitted.length} 个凭据字段未导出，恢复后需重新填写` : `已导出 ${count} 个服务`);
+  }
   const servers = data?.servers ?? [];
   const connected = servers.filter(server => server.status.state === 'connected').length;
-  const failures = servers.filter(server => ['failed','waiting-credentials'].includes(server.status.state)).length;
+  const failures = servers.filter(server => ['failed','waiting-credentials','broken'].includes(server.managed) || ['failed','waiting-credentials'].includes(server.status.state)).length;
   const visible = servers.filter(server => (server.name + (server.source?.app ?? '')).toLowerCase().includes(query.toLowerCase()) && (filter === 'all' || filter === 'connected' && server.status.state === 'connected' || filter === 'disabled' && server.status.state === 'disabled' || filter === 'failed' && ['failed', 'waiting-credentials'].includes(server.status.state)));
   return <main className="mcp-hub" data-preview={preview}>
-    <header className="hub-header"><div className="hub-brand"><span className="hub-brand-mark"><Icon name="box" size={25}/></span><div><h1>MCP Hub</h1></div></div><div className="hub-header-actions"><IconButton icon="refresh" label="刷新服务状态" disabled={loading} onClick={() => refresh().catch(() => {})}/><button className="hub-button primary" disabled={!data} onClick={() => setDraft({ entry: blank() })}><Icon name="plus" size={18}/>添加 MCP</button></div></header>
+    <header className="hub-header"><div className="hub-brand"><span className="hub-brand-mark"><Icon name="box" size={25}/></span><div><h1>MCP Hub</h1></div></div><div className="hub-header-actions"><button className="hub-button primary" disabled={!data} onClick={() => setDraft({ entry: blank() })}><Icon name="plus" size={18}/>添加 MCP</button></div></header>
     <p className="hub-description">连接、管理你的 MCP 服务，把常用工具带到 DSH。</p>
-    <nav className="hub-main-tabs" aria-label="MCP Hub 页面"><button type="button" aria-current={tab === 'installed' ? 'page' : undefined} className={tab === 'installed' ? 'active' : ''} onClick={() => setTab('installed')}><Icon name="box"/>已添加 <small>{servers.length}</small></button><button type="button" aria-current={tab === 'import' ? 'page' : undefined} className={tab === 'import' ? 'active' : ''} onClick={() => setTab('import')}><Icon name="import"/>本地导入</button><span className="hub-coming" title="后续版本支持在线 MCP 目录">搜索发现 <small>即将推出</small></span></nav>
+    <nav className="hub-main-tabs" aria-label="MCP Hub 页面"><button type="button" aria-current={tab === 'installed' ? 'page' : undefined} className={tab === 'installed' ? 'active' : ''} onClick={() => setTab('installed')}><Icon name="box"/>已添加 <small>{servers.length}</small></button><button type="button" aria-current={tab === 'import' ? 'page' : undefined} className={tab === 'import' ? 'active' : ''} onClick={() => setTab('import')}><Icon name="import"/>本地导入</button></nav>
     {(error || loadError) && <div className="hub-banner bad" role="alert"><Icon name="info"/><span>{error || loadError}</span><button className="hub-text-button" onClick={() => { setError(''); refresh().catch(() => {}); }}>重试</button></div>}
-    {notice && <div className={'hub-toast ' + notice.tone} role="status" onMouseEnter={()=>setNoticePaused(true)} onMouseLeave={()=>setNoticePaused(false)} onFocus={()=>setNoticePaused(true)} onBlur={()=>setNoticePaused(false)}><Icon name="check"/><span>{notice.text}</span><IconButton icon="close" label="关闭通知" onClick={() => setNotice(null)}/></div>}
+    {notice && <div className={'hub-toast ' + notice.tone} role="status" onMouseEnter={()=>setNoticePaused(true)} onMouseLeave={()=>setNoticePaused(false)} onFocus={()=>setNoticePaused(true)} onBlur={()=>setNoticePaused(false)}><Icon name={notice.tone === 'good' ? 'check' : 'info'}/><span>{notice.text}</span><IconButton icon="close" label="关闭通知" onClick={() => setNotice(null)}/></div>}
+    <Boundary>
     {tab === 'installed' ? <>
-      <div className="hub-stats"><div><strong>{servers.length}</strong><span>个 MCP 服务</span></div><div><i className="good"/><strong>{connected}</strong><span>已连接</span></div><div><i className={failures ? 'bad' : 'muted'}/><strong>{failures}</strong><span>需要处理</span></div><span className="hub-scope"><Icon name="folder" size={15}/>DSH 全局配置</span></div>
-      <div className="hub-toolbar"><label className="hub-search"><Icon name="search"/><input aria-label="搜索已添加的 MCP" value={query} onChange={event => setQuery(event.target.value)} placeholder="搜索服务名称或来源…"/></label><select aria-label="筛选连接状态" value={filter} onChange={event => setFilter(event.target.value)}><option value="all">全部状态</option><option value="connected">已连接</option><option value="disabled">已停用</option><option value="failed">需要处理</option></select></div>
+      <div className="hub-stats"><div><strong>{servers.length}</strong><span>个 MCP 服务</span></div><div><i className="good"/><strong>{connected}</strong><span>已连接</span></div><div><i className={failures ? 'bad' : 'muted'}/><strong>{failures}</strong><span>需要处理</span></div><span className="hub-scope" title={data?.location?.home ? '配置目录：' + data.location.home : undefined}><Icon name="folder" size={15}/>{data?.location ? `${data.profile ?? 'profile'} · ${data.location.hostname} · ${data.location.platform}` : 'DSH 全局配置'}</span></div>
+      <div className="hub-toolbar"><label className="hub-search"><Icon name="search"/><input aria-label="搜索已添加的 MCP" value={query} onChange={event => setQuery(event.target.value)} placeholder="搜索服务名称或来源…"/></label><select aria-label="筛选连接状态" value={filter} onChange={event => setFilter(event.target.value)}><option value="all">全部状态</option><option value="connected">已连接</option><option value="disabled">已停用</option><option value="failed">需要处理</option></select><div className="hub-bulk"><button className="hub-button" disabled={!!busy || !failures} onClick={restartFailed}><Icon name="refresh" size={15}/>重连异常项</button><button className="hub-button subtle" disabled={!data} onClick={exportConfig}>导出配置</button></div></div>
       <div className="hub-list-label"><span>服务</span><span>管理</span></div>
-      <div className="hub-server-list">{visible.map(server => <ServerRow key={server.name} server={server} busy={!!busy} onEdit={server => setDraft({ name: server.name, entry: server.entry, originalName: server.name })} onAction={action}/>)}</div>
+      <div className="hub-server-list">{visible.map(server => <ServerRow key={server.name} server={server} busy={!!busy} detail={toolDetails[server.name]?.tools && { tools: toolDetails[server.name].tools }} detailLoading={Boolean(toolDetails[server.name]?.loading)} onLoadTools={loadTools} onEdit={server => setDraft({ name: server.name, entry: server.entry, originalName: server.name })} onAction={action}/>)}</div>
       {!visible.length && <div className="hub-empty"><Icon name="box" size={30}/><h2>{loading ? '正在读取服务…' : servers.length ? '没有匹配的服务' : '连接你的第一个 MCP'}</h2><p>{servers.length ? '试试其他名称或切换状态筛选。' : '手动添加服务，或从其他 AI 应用导入已有配置。'}</p>{!servers.length && !loading && <button className="hub-button" onClick={() => setTab('import')}><Icon name="import"/>从本机导入</button>}</div>}
     </> : <><div className="hub-file-import"><span>从其他应用导入已有 MCP</span><button className="hub-button" disabled={scanning} onClick={() => fileInput.current.click()}><Icon name="folder" size={16}/>选择配置文件</button><input type="file" hidden ref={fileInput} accept=".json,.jsonc,.toml" onChange={readConfigFile}/></div><Sources sources={sources} scanning={scanning} scanError={scanError} onScan={scan} onImport={candidate => setDraft({ ...candidate, candidateId: candidate.id })}/></>}
+    </Boundary>
     {confirm && <DeleteDialog server={confirm} busy={!!busy} error={deleteError} onCancel={()=>setConfirm(null)} onDelete={()=>action('remove',confirm,true)}/>}
-    {draft && <Editor draft={draft} revision={data?.revision} request={request} onClose={() => setDraft(null)} onSaved={async ({result,name}) => {
+    {draft && <Editor draft={draft} revision={data?.revision} request={request} reloadRevision={async () => (await refresh(true)).revision} onClose={() => setDraft(null)} onSaved={async ({result,name}) => {
       const next = await refresh(true);
-      if(result.ok || result.draft) { setDraft(null); notify(result.draft ? name + ' 已保存，保持停用' : name + ' 已保存', result.draft ? 'muted' : 'good'); }
+      if(result.ok || result.draft) { setDraft(null); notify(result.draft ? name + ' 已保存，保持停用' : result.verifying ? name + ' 已保存，正在验证连接' : name + ' 已保存', result.draft ? 'muted' : 'good'); }
       if(result.warnings?.length) setError(result.warnings.join('；'));
       return next;
     }}/>}

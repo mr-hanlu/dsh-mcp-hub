@@ -15,3 +15,8 @@ test('the official probe rejects an existing executable that is not an MCP serve
   const result=await testConnection({get:()=>undefined},'not-mcp',{transport:'stdio',command:process.execPath,args:['-e','process.exit(0)'],env:{}},{timeoutMs:2000});
   assert.equal(result.ok,false);assert.equal(result.checks.find(check=>check.label==='MCP 握手与工具发现').ok,false);
 });
+
+test('probe reports the entry that would be written',async()=>{
+  const result=await testConnection({},'demo',{transport:'streamable-http',url:'https://e.com/mcp',headers:{Authorization:'Bearer ${env:TOKEN}'}},{env:{TOKEN:'x'},probe:async()=>({ok:true,toolNames:[],closeConfirmed:true})});
+  assert.equal(result.entry.headers.Authorization,'Bearer ${credential:TOKEN}');
+});

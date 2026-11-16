@@ -5,18 +5,28 @@
   "type": "module",
   "license": "MIT",
   "main": "src/host/index.js",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "mcp",
+    "model-context-protocol"
+  ],
   "exports": {
     ".": "./src/host/index.js",
     "./client": "./lib/client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
     "./package.json": "./package.json"
   },
   "files": [
     "src/host",
     "src/shared",
     "lib",
+    "locale",
     "cordis.patch.yml",
     "README.md",
     "docs",
+    "!docs/CODE_REVIEW*",
     "LICENSE",
     "icon.svg"
   ],
@@ -25,10 +35,12 @@
     "dev": "node scripts/dev.mjs",
     "test": "node --test tests/*.test.mjs",
     "test:integration": "node --test tests/integration/*.test.mjs",
-    "check": "node scripts/check.mjs"
+    "check": "node scripts/check.mjs",
+    "prepack": "node scripts/build.mjs"
   },
   "dependencies": {
     "@deepseek-ai/dsh-mcp-client": "0.2.2-rc.3",
+    "@deepseek-ai/schemastery": "^3.19.0",
     "jsonc-parser": "^3.3.1",
     "smol-toml": "^1.7.0"
   },

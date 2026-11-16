@@ -152,3 +152,6 @@ vite.config.ts.timestamp-*
 lib/
 dist/
 *.DS_Store
+
+# IDE
+.idea/

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { extract, fingerprint, MASK, parseDocument, preflight, redact, resolveReferences, restoreMasked, scanSources, variableInfo } from '../src/host/config.js';
@@ -37,11 +37,29 @@ test('scanning reads only known files and reports malformed files without leakin
   assert.equal(sources[3].files[0].state, 'missing');
   assert.ok(!JSON.stringify(sources).includes('secret-broken-json'));
 });
-test('redacts all environment, header and argument values, including credentials in URL', () => {
-  const entry = { transport: 'streamable-http', url:'https://user:pass@example.com/mcp?apiKey=mysecret#token', headers:{Authorization:'secret'}, env:{arbitrary:'sensitive'}, args:['--token=hidden'] };
+test('project-scope sources are read from the given directory', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'mcp-hub-project-'));
+  await writeFile(join(root,'.mcp.json'), JSON.stringify({ mcpServers: { demo: { command: 'node', args: ['server.js'] } } }));
+  try {
+    const sources = await scanSources({ home: join(root,'nohome'), env: {}, cwd: root });
+    const project = sources.find(source => source.id === 'project');
+    assert.equal(project.candidates.length, 1);
+    assert.equal(project.candidates[0].source, '当前项目');
+    assert.ok(project.files[0].path.endsWith('.mcp.json'));
+    const withoutCwd = await scanSources({ home: join(root,'nohome'), env: {} });
+    assert.equal(withoutCwd.some(source => source.id === 'project'), false);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+test('hides credential-looking keys while ordinary configuration stays readable', () => {
+  const entry = { transport: 'streamable-http', url:'https://user:pass@example.com/mcp?apiKey=mysecret#token', headers:{Authorization:'secret','X-Trace-Id':'trace-123'}, env:{GITHUB_TOKEN:'ghp_secret',PATH:'/opt/bin:/usr/bin',NODE_ENV:'production',DATABASE_URL:'postgres://u:p@db.local/app'}, args:['--token=hidden','--port','3000'] };
   const masked = redact(entry);
-  for (const value of ['mysecret','sensitive','--token=hidden','pass@']) assert.ok(!JSON.stringify(masked).includes(value));
-  assert.equal(masked.env.arbitrary,MASK); assert.deepEqual(restoreMasked(masked, entry), entry);
+  for (const value of ['mysecret','secret','ghp_secret','hidden','pass@','p@db.local']) assert.ok(!JSON.stringify(masked).includes(value), value);
+  assert.equal(masked.env.GITHUB_TOKEN,MASK);
+  assert.equal(masked.env.DATABASE_URL,MASK);
+  assert.equal(masked.env.PATH,'/opt/bin:/usr/bin');
+  assert.equal(masked.env.NODE_ENV,'production');
+  assert.equal(masked.headers['X-Trace-Id'],'trace-123');
+  assert.deepEqual(restoreMasked(masked, entry), entry);
 });
 test('fingerprints distinguish authentication contexts and ignore enabled/order', () => {
   assert.equal(fingerprint({url:'x',headers:{b:'2',a:'1'},enabled:true}),fingerprint({enabled:false,headers:{a:'1',b:'2'},url:'x'}));
@@ -68,9 +86,33 @@ test('references remain visible and variable diagnostics identify the missing ke
 });
 test('blank non-secret environment values are legal but invalid names and empty tokens are diagnosed',async()=>{
   const good=await preflight('demo',{transport:'streamable-http',url:'https://example.com',env:{OPTIONAL:''}});
-  assert.equal(good.checks.find(check=>check.label==='环境变量与请求头').ok,true);
+  assert.equal(good.checks.find(check=>check.label==='变量与请求头名称').ok,true);
+  assert.equal(good.checks.find(check=>check.label==='密钥填写').ok,true);
   const bad=await preflight('demo',{transport:'stdio',command:process.execPath,args:[],env:{'BAD KEY':'x',API_KEY:''}});
-  assert.equal(bad.ok,false);assert.match(bad.checks.find(check=>check.label==='环境变量与请求头').detail,/BAD KEY/);
+  assert.equal(bad.ok,false);
+  assert.match(bad.checks.find(check=>check.label==='变量与请求头名称').detail,/BAD KEY/);
+  assert.match(bad.checks.find(check=>check.label==='密钥填写').detail,/API_KEY/);
+});
+test('environment references are rewritten into credential templates instead of plaintext',async()=>{
+  const entry={transport:'stdio',command:'npx',args:['-y','srv'],env:{TOKEN:'${env:GITHUB_TOKEN}',OTHER:'{env:PLAIN}',ALIAS:'${OTHER_VAR}',KEEP:'${credential:EXISTING}'}};
+  const checked=await preflight('demo',entry,{env:{PATH:'/bin',GITHUB_TOKEN:'secret-value',PLAIN:'p',OTHER_VAR:'o'}});
+  assert.equal(checked.entry.env.TOKEN,'${credential:GITHUB_TOKEN}');
+  assert.equal(checked.entry.env.OTHER,'${credential:PLAIN}');
+  assert.equal(checked.entry.env.ALIAS,'${credential:OTHER_VAR}');
+  assert.equal(checked.entry.env.KEEP,'${credential:EXISTING}');
+  assert.equal(JSON.stringify(checked.entry).includes('secret-value'),false);
+  const missing=await preflight('demo',{transport:'streamable-http',url:'https://e.com/mcp',headers:{Authorization:'Bearer ${env:MISSING}'}},{env:{}});
+  assert.equal(missing.entry.headers.Authorization,'Bearer ${credential:MISSING}');
+  assert.equal(missing.checks.find(check=>check.label==='变量引用').ok,false);
+});
+test('referenceStorage=value keeps the previous write-the-current-value behaviour',async()=>{
+  const checked=await preflight('demo',{transport:'streamable-http',url:'https://e.com/mcp',headers:{Authorization:'Bearer ${env:TOKEN}'}},{env:{TOKEN:'abc'},referenceStorage:'value'});
+  assert.equal(checked.entry.headers.Authorization,'Bearer abc');
+});
+test('hard checks mark the constraints a disabled save must still satisfy',async()=>{
+  const bad=await preflight('bad name',{transport:'sse',url:'https://example.com'},{env:{}});
+  const hard=bad.checks.filter(check=>check.hard&&!check.ok).map(check=>check.label);
+  assert.deepEqual(hard,['配置名称','传输方式']);
 });
 test('resolves ambient references consistently, defers official credentials, rejects missing values', () => {
   const result=resolveReferences({env:{A:'${TOKEN}',B:'{env:TOKEN}',C:'${env:TOKEN}',D:'${credential:KEY}',E:'${MISSING}'}},{TOKEN:'value'});
@@ -88,4 +130,48 @@ test('preflight rejects unsupported SSE and absent executable', async () => {
   assert.equal((await preflight('demo',{transport:'sse',url:'https://example.com'})).ok,false);
   const result=await preflight('demo',{transport:'stdio',command:'missing',args:[]},{env:{PATH:'/none'},checkAccess:async()=>{throw new Error()},checkStat:async()=>({isDirectory:()=>true})});
   assert.equal(result.ok,false);
+});
+
+test('preflight never invents a working directory', async () => {
+  const result = await preflight('demo', { transport: 'stdio', command: process.execPath, args: [] });
+  assert.equal(Object.hasOwn(result.entry, 'cwd'), false);
+  assert.equal(result.checks.find(check => check.label === '工作目录').ok, true);
+  const declared = await preflight('demo', { transport: 'stdio', command: process.execPath, args: [], cwd: '~/work' }, { home: '/home/u', checkStat: async () => ({ isDirectory: () => true }) });
+  assert.equal(declared.entry.cwd, '/home/u/work');
+});
+
+test('transport-specific fields are reported instead of silently dropped', () => {
+  const [row] = extract({ mcpServers: { demo: { command: 'node', args: [], headers: { Authorization: 'x' }, timeout: 30 } } });
+  assert.match(row.issues.join(' '), /headers/);
+  assert.match(row.issues.join(' '), /timeout/);
+});
+
+test('an unparseable url stays readable and ordinary query parameters stay visible', () => {
+  assert.equal(redact({ url: 'not a url' }).url, 'not a url');
+  const kept = redact({ url: 'https://example.com/mcp?version=1&apiKey=secret' });
+  assert.match(kept.url, /version=1/);
+  assert.ok(!kept.url.includes('secret'));
+});
+
+test('a reference satisfied by the credential store is not reported missing', async () => {
+  const checked = await preflight('demo', { transport: 'streamable-http', url: 'https://e.com/mcp', headers: { Authorization: 'Bearer ${env:STORE_TOKEN}' } }, { env: {}, describeCredential: async name => name === 'STORE_TOKEN' ? { configured: true, source: 'store' } : { configured: false } });
+  assert.equal(checked.checks.find(check => check.label === '变量引用').ok, true);
+  assert.equal(checked.variables[0].state, 'configured');
+  assert.equal(checked.variables[0].source, 'store');
+  const unknown = await preflight('demo', { transport: 'streamable-http', url: 'https://e.com/mcp', headers: { Authorization: 'Bearer ${env:NOWHERE}' } }, { env: {}, describeCredential: async () => ({ configured: false }) });
+  assert.equal(unknown.checks.find(check => check.label === '变量引用').ok, false);
+});
+
+test('Claude project-scoped servers are imported with a scoped name', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'mcp-hub-claude-'));
+  try {
+    await writeFile(join(home, '.claude.json'), JSON.stringify({
+      projects: { '/Users/u/app': { mcpServers: { demo: { command: 'node', args: ['a.js'] } } } },
+      mcpServers: { demo: { command: 'node', args: ['b.js'] } },
+    }));
+    const claude = (await scanSources({ home, env: {} })).find(source => source.id === 'claude');
+    assert.deepEqual(claude.candidates.map(row => row.name).sort(), ['demo', 'demo-app']);
+    assert.equal(claude.candidates.find(row => row.name === 'demo-app').detail, '/Users/u/app');
+    assert.deepEqual(claude.candidates.find(row => row.name === 'demo-app').entry.args, ['a.js']);
+  } finally { await rm(home, { recursive: true, force: true }); }
 });

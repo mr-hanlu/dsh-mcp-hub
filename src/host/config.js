@@ -1,12 +1,16 @@
 import { parseDocument, extract, assertEntryShape } from '../shared/mcp-config.js';
 export { parseDocument, normalize, extract, assertEntryShape } from '../shared/mcp-config.js';
 import { createHash } from 'node:crypto';
-import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 import { access, readFile, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
 
 export { MASK, redact, redactArgs, restoreMasked, isReference } from '../shared/display.js';
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+const REFERENCE = /\$\{([^}]+)\}|\{env:([^}]+)\}/g;
+const KEY = /^[A-Za-z_][A-Za-z0-9_]*$/;
+export const MAX_TIMEOUT_MS = 120000;
+const MAX_SERVER_NAME = 32;
 export const SOURCES = [
   { id: 'codex', name: 'Codex', paths: ['.codex/config.toml'] },
   { id: 'claude', name: 'Claude Code', paths: ['.claude.json'] },
@@ -35,19 +39,106 @@ export function includesConfig(actual, requested) {
   return actual === requested;
 }
 
+/** Environment-variable style references inside one entry, as declared by the source app. */
+export function referenceNames(entry) {
+  const names = new Set();
+  for (const value of walkStrings(entry)) for (const match of value.matchAll(REFERENCE)) {
+    const reference = match[1] ?? 'env:' + match[2];
+    if (reference.startsWith('credential:')) continue;
+    names.add(reference.startsWith('env:') ? reference.slice(4) : reference);
+  }
+  return [...names];
+}
 
-export function variableInfo(entry, ambient = process.env) {
+/** Human wording for the provider's layer names. */
+const CREDENTIAL_SOURCE_LABEL = { file: 'DSH 凭证存储', env: '启动环境', 'project-env': '项目 .env', 'user-env': '$DSH_HOME/.env' };
+
+function walkStrings(value, out = []) {
+  if (typeof value === 'string') out.push(value);
+  else if (Array.isArray(value)) for (const item of value) walkStrings(item, out);
+  else if (object(value)) for (const item of Object.values(value)) walkStrings(item, out);
+  return out;
+}
+
+/**
+ * @param entry - one parsed entry.
+ * @param ambient - environment used only to report obviously unset names.
+ * @param missingOverride - names already known to be unset, when the Host resolved them.
+ * @param sources - credential descriptions keyed by name, for display only.
+ */
+export function variableInfo(entry, ambient = process.env, missingOverride, sources = {}) {
+  const known = Array.isArray(missingOverride) ? new Set(missingOverride) : null;
   return ['env','headers'].flatMap(field => Object.entries(entry[field] ?? {}).map(([key,value]) => {
-    const refs = [...value.matchAll(/\$\{([^}]+)\}|\{env:([^}]+)\}/g)].map(match => match[1] ?? 'env:' + match[2]);
-    const missing = refs.filter(ref => !ref.startsWith('credential:') && !ambient[ref.replace(/^env:/,'')]);
+    const refs = [...value.matchAll(REFERENCE)].map(match => match[1] ?? 'env:' + match[2]);
+    const nameOf = ref => ref.replace(/^env:/,'');
     const credentials = refs.filter(ref => ref.startsWith('credential:'));
-    return { field, key, kind: credentials.length ? '凭证引用' : refs.length ? '环境引用' : '直接填写', state: missing.length ? 'missing' : credentials.length ? 'credential' : value === '' ? 'empty' : 'configured', references: refs, missing };
+    const missing = refs.filter(ref => {
+      if (ref.startsWith('credential:')) return false;
+      const name = nameOf(ref);
+      if (known) return known.has(name);
+      return !ambient[name];
+    });
+    const source = refs.map(nameOf).map(name => sources[name]?.source).filter(Boolean).map(name => CREDENTIAL_SOURCE_LABEL[name] ?? name)[0];
+    return { field, key, kind: credentials.length ? '凭证引用' : refs.length ? '环境引用' : '直接填写', state: missing.length ? 'missing' : credentials.length ? 'credential' : value === '' ? 'empty' : 'configured', references: refs, missing, source };
   }));
 }
 
-export async function scanSources({ home, env = process.env, read = readFile } = {}) {
-  return Promise.all(SOURCES.map(async source => {
-    const paths = source.paths.map(path => join(home, path));
+// 项目级配置：相对启动目录读取，仅用于发现，不写入来源应用。
+export const PROJECT_SOURCES = [
+  { id: 'project', name: '当前项目', paths: ['.mcp.json', '.cursor/mcp.json', '.vscode/mcp.json'] },
+];
+
+/**
+ * `~/.claude.json` keeps user-scope servers at `mcpServers` and project-scope ones
+ * under `projects.<dir>.mcpServers`. Only reading the top level silently dropped
+ * every `claude mcp add -s project` server.
+ * @returns the flattened document plus the project directory behind each added key.
+ */
+export function flattenClaudeProjects(document) {
+  const scopes = new Map();
+  if (!object(document) || !object(document.projects)) return { document, scopes };
+  // Merge into whichever container `extract` will read, otherwise a file using
+  // `mcp_servers` would hide every project-scoped entry.
+  const container = object(document.mcp_servers) ? 'mcp_servers' : object(document.servers) ? 'servers' : 'mcpServers';
+  const merged = object(document[container]) ? { ...document[container] } : {};
+  let added = 0;
+  for (const [dir, project] of Object.entries(document.projects)) {
+    const servers = object(project) && object(project.mcpServers) ? project.mcpServers : null;
+    if (!servers) continue;
+    for (const [name, raw] of Object.entries(servers)) {
+      let key = Object.hasOwn(merged, name) ? scopedName(name, dir) : name.slice(0, MAX_SERVER_NAME);
+      for (let attempt = 2; Object.hasOwn(merged, key); attempt += 1) key = scopedName(name, dir, attempt);
+      merged[key] = raw;
+      scopes.set(key, dir);
+      added += 1;
+    }
+  }
+  if (!added) return { document, scopes };
+  return { document: { ...document, [container]: merged }, scopes };
+}
+
+/** A short, name-legal hint for a project directory. */
+function projectLabel(dir) {
+  const base = String(dir).split(/[\\/]/).filter(Boolean).pop() ?? 'project';
+  return base.replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 16) || 'project';
+}
+
+/**
+ * Keep the candidate name inside the official `[A-Za-z0-9_-]{1,32}` budget; a
+ * longer key would pass the import list and then fail the hard name check on save.
+ */
+function scopedName(name, dir, attempt = 0) {
+  const suffix = '-' + projectLabel(dir) + (attempt > 1 ? '-' + attempt : '');
+  const room = Math.max(1, MAX_SERVER_NAME - suffix.length);
+  return name.slice(0, room) + suffix.slice(0, MAX_SERVER_NAME - room);
+}
+
+export async function scanSources({ home, env = process.env, cwd, read = readFile } = {}) {
+  const groups = [...SOURCES];
+  if (cwd) groups.push(...PROJECT_SOURCES);
+  return Promise.all(groups.map(async source => {
+    const root = source.id === 'project' ? cwd : home;
+    const paths = source.paths.map(path => join(root, path));
     if (source.id === 'codex' && env.CODEX_HOME) paths.unshift(join(env.CODEX_HOME, 'config.toml'));
     if (source.id === 'opencode' && env.XDG_CONFIG_HOME) paths.unshift(join(env.XDG_CONFIG_HOME, 'opencode/opencode.json'), join(env.XDG_CONFIG_HOME, 'opencode/opencode.jsonc'));
     if (source.id === 'opencode' && env.OPENCODE_CONFIG) paths.unshift(resolve(env.OPENCODE_CONFIG));
@@ -56,9 +147,11 @@ export async function scanSources({ home, env = process.env, read = readFile } =
     for (const path of [...new Set(paths)]) {
       try {
         const text = await read(path, 'utf8');
-        const rows = extract(parseDocument(text, path));
+        const parsed = parseDocument(text, path);
+        const { document, scopes } = source.id === 'claude' ? flattenClaudeProjects(parsed) : { document: parsed, scopes: new Map() };
+        const rows = extract(document);
         files.push({ path, state: 'read', count: rows.length });
-        for (const row of rows) candidates.push({ ...row, id: createHash('sha256').update(path + '\0' + row.name).digest('hex'), source: source.name, sourcePath: path });
+        for (const row of rows) candidates.push({ ...row, id: createHash('sha256').update(path + '\0' + row.name).digest('hex'), source: source.name, sourcePath: path, detail: scopes.get(row.name) });
       } catch (error) {
         files.push({ path, state: error.code === 'ENOENT' ? 'missing' : 'error', error: error.code === 'ENOENT' ? undefined : '无法读取或解析配置，请检查格式和文件权限' });
       }
@@ -67,44 +160,96 @@ export async function scanSources({ home, env = process.env, read = readFile } =
   }));
 }
 
-export function resolveReferences(entry, ambient = process.env) {
-  const unresolved = new Set();
-  function walk(value) {
-    if (typeof value === 'string') return value.replace(/\$\{([^}]+)\}|\{env:([^}]+)\}/g, (match, inner, opencode) => {
-      const reference = inner ?? 'env:' + opencode;
-      if (reference.startsWith('credential:')) return match; // Official provider resolves it during startup.
-      const key = reference.startsWith('env:') ? reference.slice(4) : reference;
-      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) || ambient[key] === undefined || ambient[key] === '') { unresolved.add(key); return match; }
-      return ambient[key];
-    });
+function walkReferences(entry, replace) {
+  const walk = value => {
+    if (typeof value === 'string') return value.replace(REFERENCE, replace);
     if (Array.isArray(value)) return value.map(walk);
     if (object(value)) return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, walk(item)]));
     return value;
-  }
-  return { entry: walk(entry), unresolved: [...unresolved] };
+  };
+  return walk(entry);
 }
 
-export async function preflight(name, input, { env = process.env, home, checkAccess = access, checkStat = stat } = {}) {
+/**
+ * 把来源应用的引用改写成 DSH 凭证模板，配置里不落明文。
+ * `${NAME}`、`${env:NAME}`、`{env:NAME}` → `${credential:NAME}`；`${credential:NAME}` 原样保留。
+ * 环境变量当前是否存在仍然检查，只是不再把值写进配置。
+ */
+export function planReferences(entry, ambient = process.env) {
+  const unresolved = new Set();
+  const planned = walkReferences(entry, (match, inner, opencode) => {
+    const reference = inner ?? 'env:' + opencode;
+    if (reference.startsWith('credential:')) {
+      const name = reference.slice('credential:'.length);
+      if (!KEY.test(name)) { unresolved.add(name); return match; }
+      return '${credential:' + name + '}';
+    }
+    const key = reference.startsWith('env:') ? reference.slice(4) : reference;
+    if (!KEY.test(key)) { unresolved.add(key); return match; }
+    if (ambient[key] === undefined || ambient[key] === '') unresolved.add(key);
+    return '${credential:' + key + '}';
+  });
+  return { entry: planned, unresolved: [...unresolved], references: referenceNames(entry) };
+}
+
+/** 仅用于一次性连接测试：把引用解析成真实值，不写入任何配置。 */
+export function resolveReferences(entry, ambient = process.env) {
+  const unresolved = new Set();
+  const resolved = walkReferences(entry, (match, inner, opencode) => {
+    const reference = inner ?? 'env:' + opencode;
+    if (reference.startsWith('credential:')) return match; // Official provider resolves it during startup.
+    const key = reference.startsWith('env:') ? reference.slice(4) : reference;
+    if (!KEY.test(key) || ambient[key] === undefined || ambient[key] === '') { unresolved.add(key); return match; }
+    return ambient[key];
+  });
+  return { entry: resolved, unresolved: [...unresolved], references: referenceNames(entry) };
+}
+
+/**
+ * @param describeCredential - optional async credential lookup from the Host. An
+ *   environment reference whose value lives in the DSH credential store (or a
+ *   `.env` layer) is configured even though this process's environment is not.
+ */
+export async function preflight(name, input, { env = process.env, home, cwd, checkAccess = access, checkStat = stat, referenceStorage = 'template', describeCredential } = {}) {
   assertEntryShape(input);
   const checks = [];
-  const add = (label, ok, detail) => checks.push({ label, ok, detail });
-  add('配置名称', /^[A-Za-z0-9_-]{1,32}$/.test(name), '使用 1–32 位字母、数字、下划线或连字符');
-  const resolved = resolveReferences(input, env);
+  // hard 检查即使在「保存为停用」时也必须通过：它们决定条目本身是否合法。
+  const add = (label, ok, detail, hard = false) => checks.push({ label, ok, detail, hard });
+  add('配置名称', /^[A-Za-z0-9_-]{1,32}$/.test(name), '使用 1–32 位字母、数字、下划线或连字符', true);
+  const resolved = referenceStorage === 'value' ? resolveReferences(input, env) : planReferences(input, env);
   const entry = resolved.entry;
-  add('变量引用', !resolved.unresolved.length, resolved.unresolved.length ? '缺少变量：' + resolved.unresolved.join('、') : '引用已解析；凭证引用将在正式连接时验证');
-  const invalidKeys = ['env','headers'].flatMap(field => Object.keys(entry[field] ?? {}).filter(key => !(field === 'env' ? /^[A-Za-z_][A-Za-z0-9_]*$/ : /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/).test(key)));
+  let missing = [...resolved.unresolved];
+  const sources = {};
+  if (describeCredential && missing.length) {
+    const still = [];
+    for (const key of missing) {
+      let info;
+      try { info = await describeCredential(key); } catch { info = undefined; }
+      if (info?.configured) { sources[key] = info; continue; }
+      still.push(key);
+    }
+    missing = still;
+  }
+  add('变量引用', !missing.length, missing.length ? '缺少变量：' + missing.join('、') : referenceStorage === 'value' ? '引用已解析；凭证引用将在正式连接时验证' : '将保存为 ${credential:…} 引用，由 DSH 凭证服务在连接时解析');
+  const invalidKeys = ['env','headers'].flatMap(field => Object.keys(entry[field] ?? {}).filter(key => !(field === 'env' ? KEY : /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/).test(key)));
   const emptySecrets = ['env','headers'].flatMap(field => Object.entries(entry[field] ?? {}).filter(([key,value]) => value === '' && (field === 'headers' || /token|secret|password|api_?key/i.test(key))).map(([key])=>key));
-  add('环境变量与请求头', !invalidKeys.length && !emptySecrets.length, invalidKeys.length ? '名称无效：' + invalidKeys.join('、') : emptySecrets.length ? '请填写：' + emptySecrets.join('、') : '配置有效');
+  add('变量与请求头名称', !invalidKeys.length, invalidKeys.length ? '名称无效：' + invalidKeys.join('、') : '名称有效', true);
+  add('密钥填写', !emptySecrets.length, emptySecrets.length ? '请填写：' + emptySecrets.join('、') : '没有必填项留空');
   if (entry.transport === 'stdio') {
-    let cwd = entry.cwd || process.cwd();
-    if (cwd.startsWith('~/') && home) cwd = join(home, cwd.slice(2));
-    entry.cwd = resolve(cwd);
-    let cwdOk = false;
-    try { cwdOk = (await checkStat(entry.cwd)).isDirectory(); } catch {}
-    add('工作目录', cwdOk, cwdOk ? entry.cwd : '目录不存在或不可访问');
+    // A cwd the user did not declare is never written back: process.cwd() belongs to
+    // the Host, not to the user's project, and pinning it would break the config on
+    // another machine. It is only used to resolve and check the command.
+    const declared = typeof entry.cwd === 'string' ? entry.cwd.trim() : '';
+    const expanded = declared && declared.startsWith('~/') && home ? join(home, declared.slice(2)) : declared;
+    const checkCwd = expanded ? resolve(expanded) : cwd ?? process.cwd();
+    if (declared) entry.cwd = checkCwd;
+    else delete entry.cwd;
+    let cwdOk = true;
+    if (declared) { try { cwdOk = (await checkStat(checkCwd)).isDirectory(); } catch { cwdOk = false; } }
+    add('工作目录', cwdOk, declared ? (cwdOk ? checkCwd : '目录不存在或不可访问') : '未指定，由 DSH 决定');
     const validCommand = typeof entry.command === 'string' && !!entry.command.trim();
     if (validCommand && entry.command.startsWith('~/') && home) entry.command = join(home, entry.command.slice(2));
-    if (validCommand && /[\\/]/.test(entry.command) && !isAbsolute(entry.command)) entry.command = resolve(entry.cwd, entry.command);
+    if (validCommand && /[\\/]/.test(entry.command) && !isAbsolute(entry.command)) entry.command = resolve(checkCwd, entry.command);
     let executable;
     if (validCommand && !entry.command.includes('${credential:')) {
       const paths = isAbsolute(entry.command) ? [entry.command] : (entry.env?.PATH ?? env.PATH ?? '').split(process.platform === 'win32' ? ';' : ':').map(path => join(path, entry.command));
@@ -113,14 +258,14 @@ export async function preflight(name, input, { env = process.env, home, checkAcc
     const deferred = validCommand && entry.command.includes('${credential:');
     add('启动命令', !!executable || deferred, deferred ? '凭证将在正式启动时解析' : executable || 'DSH 的 PATH 中找不到可执行命令，请填写绝对路径');
     if (executable) entry.command = executable;
-    add('启动参数', Array.isArray(entry.args ?? []) && (entry.args ?? []).every(v => typeof v === 'string'), '参数按数组传递，不使用 Shell 拼接');
+    add('启动参数', Array.isArray(entry.args ?? []) && (entry.args ?? []).every(v => typeof v === 'string'), '参数按数组传递，不使用 Shell 拼接', true);
     const relativeArgs = (entry.args ?? []).some(value => typeof value === 'string' && (/^\.{1,2}[\\/]/.test(value) || /^[^/@-][^:]*\.(m?js|cjs|py|sh|ts)$/.test(value)));
-    if (relativeArgs && !input.cwd) add('相对路径', false, '参数包含相对文件路径，请明确填写工作目录后重试');
+    if (relativeArgs && !declared) add('相对路径', false, '参数包含相对文件路径，请明确填写工作目录后重试');
   } else if (entry.transport === 'streamable-http') {
     let valid = false;
     try { valid = ['http:', 'https:'].includes(new URL(entry.url).protocol); } catch {}
     add('服务地址', valid, valid ? 'HTTP 地址有效，认证将在连接时验证' : '请填写有效的 HTTP / HTTPS 地址');
-  } else add('传输方式', false, '当前仅支持 stdio 和 Streamable HTTP');
-  for (const field of ['startupTimeoutMs', 'toolCallTimeoutMs']) if (entry[field] !== undefined) add('超时设置', Number.isFinite(entry[field]) && entry[field] > 0 && entry[field] <= 120000, '超时需在 1–120000 毫秒之间');
-  return { ok: checks.every(check => check.ok), checks, entry, variables: variableInfo(input, env) };
+  } else add('传输方式', false, '当前仅支持 stdio 和 Streamable HTTP', true);
+  for (const field of ['startupTimeoutMs', 'toolCallTimeoutMs']) if (entry[field] !== undefined) add('超时设置', Number.isFinite(entry[field]) && entry[field] > 0 && entry[field] <= MAX_TIMEOUT_MS, `超时需在 1–${MAX_TIMEOUT_MS} 毫秒之间`, true);
+  return { ok: checks.every(check => check.ok), checks, entry, variables: variableInfo(input, env, missing, sources) };
 }

@@ -1,3 +1,12 @@
+# 插入 MCP Hub 的 Host 行。下面的 config 全为可选默认值，可按需取消注释覆盖；
+# 用户在 profile 里覆盖的 config 层会跨插件升级保留。
 - insert:
     - id: dsh-mcp-hub
       name: dsh-mcp-hub
+      # config:
+      #   connectWaitMs: 45000      # 保存后等待正式连接与工具注册的基础预算（毫秒）
+      #   probeTimeoutMs: 20000     # 测试连接的握手与工具发现预算（毫秒）
+      #   verifyPollMs: 1000        # 验证期读取运行状态的兜底间隔（毫秒），状态事件会立即结算
+      #   descriptorTtlMs: 1500     # 配置视图缓存时间（毫秒），写入后立即失效
+      #   maxConfigBytes: 2097152   # 配置文件与请求体上限（字节）
+      #   referenceStorage: template # template 保留 ${credential:…}；value 写入当前值

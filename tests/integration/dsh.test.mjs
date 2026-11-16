@@ -53,7 +53,8 @@ process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:req.id,result})+'\\n');});
     await ctx.plugin(Settings);
     await mountRootInclude(ctx,join(dir,'cordis.yml'),readProfilePatches('test',profile));
     await ctx.loader.await();
-    const service=await new HubService(ctx,{home,env:{...process.env,HUB_TEST_TOKEN:'integration-value'},metaPath:join(home,'sources.json'),waitMs:10000}).init();
+    // 真实 profile 里没有挂载 credentials 提供方，这里保留旧的「写入当前值」模式来覆盖连接与工具注册。
+    const service=await new HubService(ctx,{home,env:{...process.env,HUB_TEST_TOKEN:'integration-value'},metaPath:join(home,'sources.json'),waitMs:10000,referenceStorage:'value'}).init();
     const before=await service.list();
     const tested=await service.test({name:'hubtest',entry:{transport:'stdio',command:process.execPath,args:[server],cwd:home,env:{HUB_TEST_TOKEN:'${env:HUB_TEST_TOKEN}'}}});
     assert.equal(tested.ok,true,JSON.stringify(tested));
