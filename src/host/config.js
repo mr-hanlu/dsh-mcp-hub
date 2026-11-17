@@ -11,11 +11,46 @@ const REFERENCE = /\$\{([^}]+)\}|\{env:([^}]+)\}/g;
 const KEY = /^[A-Za-z_][A-Za-z0-9_]*$/;
 export const MAX_TIMEOUT_MS = 120000;
 const MAX_SERVER_NAME = 32;
+const macSupport = ({ home }) => join(home, 'Library/Application Support');
+const appData = ({ home, env }) => env.APPDATA || join(home, 'AppData', 'Roaming');
+const configHome = ({ home, env }) => env.XDG_CONFIG_HOME || join(home, '.config');
+const desktopConfig = ({ home, env, platform }, app, file) => {
+  if (platform === 'darwin') return [join(macSupport({ home }), app, file)];
+  if (platform === 'win32') return [join(appData({ home, env }), app, file)];
+  return [join(configHome({ home, env }), app, file)];
+};
+const vscodeUserPaths = ({ home, env, platform }) => {
+  const dirs = platform === 'darwin'
+    ? [join(macSupport({ home }), 'Code', 'User'), join(macSupport({ home }), 'Code - Insiders', 'User')]
+    : platform === 'win32'
+      ? [join(appData({ home, env }), 'Code', 'User'), join(appData({ home, env }), 'Code - Insiders', 'User')]
+      : [join(configHome({ home, env }), 'Code', 'User'), join(configHome({ home, env }), 'Code - Insiders', 'User')];
+  return [
+    ...dirs.map(dir => join(dir, 'mcp.json')),
+    join(home, '.vscode-server', 'data', 'User', 'mcp.json'),
+    join(home, '.vscode-server-insiders', 'data', 'User', 'mcp.json'),
+  ];
+};
+const opencodePaths = ({ home, env, platform }) => {
+  const paths = [join(home, '.config', 'opencode', 'opencode.json'), join(home, '.config', 'opencode', 'opencode.jsonc')];
+  if (env.XDG_CONFIG_HOME) paths.unshift(join(env.XDG_CONFIG_HOME, 'opencode', 'opencode.json'), join(env.XDG_CONFIG_HOME, 'opencode', 'opencode.jsonc'));
+  if (env.OPENCODE_CONFIG) paths.unshift(resolve(env.OPENCODE_CONFIG));
+  if (platform === 'win32' && env.APPDATA) paths.push(join(env.APPDATA, 'opencode', 'opencode.json'), join(env.APPDATA, 'opencode', 'opencode.jsonc'));
+  return paths;
+};
+const codexPaths = ({ home, env }) => env.CODEX_HOME ? [join(env.CODEX_HOME, 'config.toml'), join(home, '.codex', 'config.toml')] : [join(home, '.codex', 'config.toml')];
+const geminiPaths = ({ home, env }) => [join(env.GEMINI_DIR || join(home, '.gemini'), 'settings.json')];
+
 export const SOURCES = [
-  { id: 'codex', name: 'Codex', paths: ['.codex/config.toml'] },
+  { id: 'codex', name: 'Codex', paths: codexPaths },
   { id: 'claude', name: 'Claude Code', paths: ['.claude.json'] },
-  { id: 'opencode', name: 'OpenCode', paths: ['.config/opencode/opencode.json', '.config/opencode/opencode.jsonc'] },
+  { id: 'opencode', name: 'OpenCode', paths: opencodePaths },
   { id: 'cursor', name: 'Cursor', paths: ['.cursor/mcp.json'] },
+  { id: 'claude-desktop', name: 'Claude Desktop', paths: ({ home, env, platform }) => desktopConfig({ home, env, platform }, 'Claude', 'claude_desktop_config.json') },
+  { id: 'gemini', name: 'Gemini CLI', paths: geminiPaths },
+  { id: 'vscode', name: 'VS Code / Copilot', paths: vscodeUserPaths },
+  { id: 'copilot-cli', name: 'Copilot CLI', paths: ['.copilot/mcp-config.json'] },
+  { id: 'windsurf', name: 'Windsurf', paths: ['.codeium/windsurf/mcp_config.json', '.codeium/windsurf-next/mcp_config.json'] },
 ];
 
 
@@ -30,6 +65,14 @@ export function connectionFingerprint(entry) {
   let url = entry.url;
   try { url = new URL(url).toString(); } catch {}
   return fingerprint({ transport: entry.transport, url, headers: Object.fromEntries(Object.entries(entry.headers ?? {}).map(([key,value]) => [key.toLowerCase(),value])) });
+}
+
+/** Connection identity without credentials, used to recognize a backup entry whose secret fields were omitted. */
+export function connectionSkeleton(entry) {
+  if (entry.transport === 'stdio') return fingerprint({ transport: 'stdio', command: entry.command, args: entry.args ?? [], cwd: entry.cwd ?? '' });
+  let url = entry.url;
+  try { url = new URL(url).toString(); } catch {}
+  return fingerprint({ transport: entry.transport, url });
 }
 
 // Compare requested fields against an effective config that may include schema defaults.
@@ -85,7 +128,7 @@ export function variableInfo(entry, ambient = process.env, missingOverride, sour
 
 // 项目级配置：相对启动目录读取，仅用于发现，不写入来源应用。
 export const PROJECT_SOURCES = [
-  { id: 'project', name: '当前项目', paths: ['.mcp.json', '.cursor/mcp.json', '.vscode/mcp.json'] },
+  { id: 'project', name: '当前项目', paths: ['.mcp.json', '.cursor/mcp.json', '.vscode/mcp.json', '.gemini/settings.json', 'opencode.json', 'opencode.jsonc'] },
 ];
 
 /**
@@ -133,15 +176,13 @@ function scopedName(name, dir, attempt = 0) {
   return name.slice(0, room) + suffix.slice(0, MAX_SERVER_NAME - room);
 }
 
-export async function scanSources({ home, env = process.env, cwd, read = readFile } = {}) {
+export async function scanSources({ home, env = process.env, cwd, read = readFile, platform = process.platform } = {}) {
   const groups = [...SOURCES];
   if (cwd) groups.push(...PROJECT_SOURCES);
   return Promise.all(groups.map(async source => {
     const root = source.id === 'project' ? cwd : home;
-    const paths = source.paths.map(path => join(root, path));
-    if (source.id === 'codex' && env.CODEX_HOME) paths.unshift(join(env.CODEX_HOME, 'config.toml'));
-    if (source.id === 'opencode' && env.XDG_CONFIG_HOME) paths.unshift(join(env.XDG_CONFIG_HOME, 'opencode/opencode.json'), join(env.XDG_CONFIG_HOME, 'opencode/opencode.jsonc'));
-    if (source.id === 'opencode' && env.OPENCODE_CONFIG) paths.unshift(resolve(env.OPENCODE_CONFIG));
+    const context = { home, env, cwd, platform };
+    const paths = typeof source.paths === 'function' ? source.paths(context) : source.paths.map(path => join(root, path));
     const files = [];
     const candidates = [];
     for (const path of [...new Set(paths)]) {

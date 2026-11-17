@@ -16,6 +16,8 @@ const STATUS = {
   ROW_NOT_FOUND: 404,
   SERVICE_CLOSED: 503,
   SERVICE_UNAVAILABLE: 503,
+  CATALOG_UNAVAILABLE: 502,
+  CATALOG_INVALID: 502,
 };
 
 export class HubError extends Error {

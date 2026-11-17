@@ -5,8 +5,10 @@ import { randomUUID } from 'node:crypto';
 import { testConnection } from './probe.js';
 import { parseEditorObject, parseDocument, DEFAULT_MAX_CONFIG_BYTES } from '../shared/mcp-config.js';
 import { flattenClaudeProjects } from './config.js';
+import { buildBackup } from '../shared/backup.js';
+import { createCatalog } from './catalog.js';
 import { fail } from '../shared/errors.js';
-import { MASK, connectionFingerprint, includesConfig, preflight, redact, restoreMasked, scanSources } from './config.js';
+import { MASK, connectionFingerprint, connectionSkeleton, includesConfig, preflight, redact, restoreMasked, scanSources } from './config.js';
 
 /** Chinese wording for the manager's terminal stop reasons. */
 const REASON_TEXT = {
@@ -47,12 +49,19 @@ export class HubService {
     this.referenceStorage = options.referenceStorage === 'value' ? 'value' : 'template';
     this.probeTimeoutMs = options.probeTimeoutMs ?? 20000;
     this.descriptorTtlMs = options.descriptorTtlMs ?? 1500;
+    this.catalog = options.catalog ?? createCatalog({
+      baseUrl: options.catalogBaseUrl,
+      timeoutMs: options.catalogTimeoutMs,
+      cacheMs: options.catalogCacheMs,
+    });
     this.origins = Object.create(null);
     this.lastVerifications = Object.create(null);
     this.candidates = new Map();
     this.sourceGroups = [];
     this.verifications = new Map();
+    this.importBatches = new Map();
     this.statusWatchers = new Set();
+    this.verificationTimer = null;
     this.waiters = new Set();
     this.tail = Promise.resolve();
     this.metaTail = Promise.resolve();
@@ -73,6 +82,16 @@ export class HubService {
             this.origins = Object.assign(Object.create(null), parsed.origins);
             this.lastVerifications = Object.assign(Object.create(null), parsed.verifications ?? {});
           } else this.origins = Object.assign(Object.create(null), parsed); // legacy: a bare origins map
+          if (Array.isArray(parsed.sources)) {
+            this.sourceGroups = parsed.sources
+              .filter(source => source && source.manual === true && typeof source.id === 'string' && source.id.startsWith('file-') && Array.isArray(source.candidates))
+              .map(source => ({
+                ...source,
+                manual: true,
+                files: Array.isArray(source.files) ? source.files : [],
+                candidates: source.candidates.map(candidate => ({ ...candidate, id: typeof candidate.id === 'string' ? candidate.id : randomUUID() })),
+              }));
+          }
         }
       } catch (error) { if (error.code !== 'ENOENT') this.ctx.logger?.warn?.('MCP Hub 来源记录不可读，将继续读取服务配置'); }
     }
@@ -289,9 +308,24 @@ export class HubService {
     const rows = parseEditorObject(flattened.document, safeName.replace(/\.(?:jsonc?|toml)$/i,''));
     const id = 'file-' + randomUUID();
     const candidates = rows.map(row => ({ ...row, id: randomUUID(), source: '配置文件', sourcePath: safeName, detail: flattened.scopes.get(row.name) }));
-    const source = { id, name: '配置文件 · ' + safeName, files: [{ path: safeName, state: 'read', count: rows.length }], candidates };
+    const source = { id, name: '配置文件 · ' + safeName, manual: true, files: [{ path: safeName, state: 'read', count: rows.length }], candidates };
     this.sourceGroups.push(source);
+    await this.persistMeta().catch(error => this.ctx.logger?.warn?.('MCP Hub 无法保存手动导入来源：' + (error?.message ?? error)));
     return this.presentSources([source]);
+  }
+  /** Only a source the user picked by hand can be removed; auto-scanned sources are read-only. */
+  async removeSource(id) {
+    if (typeof id !== 'string' || !id.startsWith('file-')) fail('SOURCE_READONLY', '自动扫描的配置不能删除');
+    const index = this.sourceGroups.findIndex(source => source.id === id);
+    if (index < 0) fail('SOURCE_NOT_FOUND', '找不到这个导入来源，请刷新后重试');
+    const [source] = this.sourceGroups.splice(index, 1);
+    if (!source.manual) {
+      this.sourceGroups.splice(index, 0, source);
+      fail('SOURCE_READONLY', '自动扫描的配置不能删除');
+    }
+    for (const candidate of source.candidates) this.candidates.delete(candidate.id);
+    await this.persistMeta().catch(error => this.ctx.logger?.warn?.('MCP Hub 无法保存来源删除：' + (error?.message ?? error)));
+    return this.sources();
   }
   reveal(body) {
     const current = body.candidateId ? this.candidates.get(body.candidateId)?.entry : this.descriptor().value?.servers?.[body.originalName];
@@ -304,7 +338,9 @@ export class HubService {
   async presentSources(sources) {
     const existing = this.descriptor().value?.servers ?? {};
     const existingHashes = new Map();
+    const existingSkeletons = new Map();
     for (const [name, entry] of Object.entries(existing)) {
+      existingSkeletons.set(name, connectionSkeleton(entry));
       try { existingHashes.set(connectionFingerprint((await preflight(name, entry, this.preflightOptions())).entry), name); }
       catch { /* one unreadable stored entry must not break the import list */ }
     }
@@ -322,15 +358,28 @@ export class HubService {
           candidates.push({ ...candidate, entry: redact(candidate.entry ?? {}), issues: [...new Set([...(candidate.issues ?? []), '无法校验此配置：' + (error?.message ?? '未知错误')])], duplicate: undefined, duplicateSource: undefined, nameConflict: false });
           continue;
         }
-        const duplicate = existingHashes.get(hash);
+        const sameNameSkeleton = existingSkeletons.get(candidate.name) === connectionSkeleton(checked.entry);
+        const duplicate = existingHashes.get(hash) ?? (sameNameSkeleton ? candidate.name : undefined);
         const duplicateSource = all.get(hash);
         all.set(hash, source.name);
-        candidates.push({ ...candidate, entry: redact(candidate.entry), duplicate, duplicateSource, nameConflict: Object.hasOwn(existing, candidate.name) && !duplicate });
+        candidates.push({ ...candidate, entry: redact(candidate.entry), duplicate, duplicateSource, credentialOmitted: Boolean(sameNameSkeleton && !existingHashes.has(hash)), nameConflict: Object.hasOwn(existing, candidate.name) && !duplicate });
       }
       presented.push({ ...source, candidates });
     }
     return { sources: presented };
   }
+  /** Build a backup for the browser; credentials are opt-in and explicit. */
+  exportBackup(body = {}) {
+    const includeSecrets = body?.includeSecrets === true;
+    const servers = Object.entries(this.descriptor().value?.servers ?? {}).map(([name, entry]) => ({
+      name,
+      entry: includeSecrets ? entry : redact(entry),
+    }));
+    const { backup, omitted } = buildBackup(servers);
+    return { includeSecrets, count: Object.keys(backup).length, backup, omitted };
+  }
+  async catalogSearch(body, signal) { return this.catalog.search(body, signal); }
+  async catalogDetail(body, signal) { return this.catalog.detail(body, signal); }
   draft(body, current) {
     const candidate = body.candidateId ? this.candidates.get(body.candidateId) : null;
     if (body.candidateId && !candidate) fail('CANDIDATE_STALE', '扫描结果已失效，请重新扫描后再添加');
@@ -372,12 +421,15 @@ export class HubService {
   }
   describeProbe(name, probe) {
     const elapsed = Number.isFinite(probe.durationMs) ? `，用时 ${Math.round(probe.durationMs)} ms` : '';
-    const checks = [probe.ok
-      ? { label: 'MCP 握手与工具发现', ok: true, detail: `已连接 ${probe.serverInfo?.name ?? name}，发现 ${probe.toolNames?.length ?? 0} 个工具${probe.truncated ? '（列表已截断）' : ''}${elapsed}` }
-      : { label: 'MCP 握手与工具发现', ok: false, detail: `${probe.stage === 'list' ? '工具列表阶段' : '连接阶段'}失败：${probe.message ?? '未知原因'}${elapsed}` }];
+    const connected = probe.ok === true || probe.stage === 'list';
+    const failure = `${probe.stage === 'list' ? '工具列表阶段' : '连接阶段'}失败：${probe.message ?? '未知原因'}${elapsed}`;
+    const checks = [{ label: 'MCP 连接', ok: connected, detail: connected ? `已连接 ${probe.serverInfo?.name ?? name}${elapsed}` : failure }];
+    if (connected) {
+      checks.push({ label: '工具发现', ok: probe.ok === true, detail: probe.ok === true ? `发现 ${probe.toolNames?.length ?? 0} 个工具` : failure });
+    }
     const cleaned = probe.closeConfirmed === true && !probe.cleanupError;
     checks.push({ label: '测试连接已关闭', ok: cleaned, detail: cleaned ? '未改动正在运行的服务实例' : (probe.cleanupError ? '测试清理未完成：' + probe.cleanupError : '测试清理未确认，请检查服务进程') });
-    return { ok: probe.ok === true && cleaned, checks, stage: probe.stage, durationMs: probe.durationMs };
+    return { ok: probe.ok === true && cleaned, connectionOk: connected, capability: probe.ok === true ? 'ok' : probe.stage === 'list' ? 'failed' : 'skipped', cleanupOk: cleaned, checks, stage: probe.stage, durationMs: probe.durationMs };
   }
   finishProbe(name, startedAt, result) {
     const detail = result.checks?.find(check => !check.ok)?.detail ?? result.checks?.[0]?.detail ?? '复诊完成';
@@ -404,6 +456,8 @@ export class HubService {
       const form = this.descriptor({ fresh: true });
       if (!Number.isInteger(body.revision) || body.revision !== form.revision) fail('REVISION_CONFLICT', '配置已发生变化，请刷新列表并重新核对后保存');
       const entries = form.value?.servers ?? {};
+      if (body.action === 'import') return this.importBatch(body, form, entries);
+      if (body.action === 'undo-import') return this.undoImport(body, form, entries);
       const exists = Object.hasOwn(entries, body.name);
       if (body.action === 'bulk') return this.bulk(body, form, entries);
       if (body.action === 'save') {
@@ -421,7 +475,9 @@ export class HubService {
         if (checked.checks.some(check => check.hard && !check.ok)) return { ok: false, saved: false, checks: checked.checks, variables: checked.variables };
         if (!checked.ok && body.mode !== 'draft') return { ok: false, saved: false, checks: checked.checks, variables: checked.variables };
         // Never claim success merely because the profile accepted the write.
-        const next = { ...checked.entry, enabled: body.mode !== 'draft' && entry.enabled !== false };
+        // New rows are enabled unless the caller explicitly asked for a draft;
+        // editing preserves the row's current switch state.
+        const next = { ...checked.entry, enabled: body.mode !== 'draft' && (body.originalName ? entry.enabled !== false : true) };
         const previousStatus = runtime.find(row => row.name === (body.originalName ?? body.name))?.status;
         const changed = renamed || !includesConfig(entries[body.name], next);
         // 改名在同一个 revision 里一次提交：先写新键，再删旧键。
@@ -466,6 +522,100 @@ export class HubService {
       fail('UNSUPPORTED_ACTION', '不支持的操作');
     });
   }
+  /**
+   * Add several services from one pasted document. Preflight every row first, then
+   * write all of them in a single revision: one bad row means no write at all.
+   * Existing names are skipped instead of blocking the rest (the UI labels them).
+   */
+  async importBatch(body, form, entries) {
+    if (!Array.isArray(body.entries)) fail('REQUEST_INVALID', '缺少批量配置');
+    if (!body.entries.length) fail('REQUEST_INVALID', '没有可添加的服务');
+    if (body.entries.length > 100) fail('REQUEST_INVALID', '一次最多添加 100 个服务');
+    const runtime = this.ctx.mcpManager.list();
+    const base = form.base?.servers ?? {};
+    const skipped = [];
+    const seen = new Set();
+    const prepared = [];
+    for (const item of body.entries) {
+      if (!item || typeof item !== 'object' || typeof item.name !== 'string' || !item.name) fail('REQUEST_INVALID', '批量配置缺少服务名称');
+      if (seen.has(item.name)) fail('NAME_TAKEN', `批量配置中有重复的服务名：${item.name}`);
+      seen.add(item.name);
+      if (Object.hasOwn(entries, item.name) || Object.hasOwn(base, item.name) || runtime.some(row => row.name === item.name)) {
+        skipped.push({ name: item.name, reason: '已存在' });
+        continue;
+      }
+      const { entry, candidate } = this.draft({ entry: item.entry, name: item.name, candidateId: item.candidateId }, entries);
+      if (candidate?.issues?.length && !item.acceptUnsupported) fail('CONFIG_INVALID', `请先确认「${item.name}」中的未迁移字段`);
+      const checked = await preflight(item.name, entry, this.preflightOptions());
+      if (!checked.ok) return { ok: false, saved: false, failed: { name: item.name }, checks: checked.checks, variables: checked.variables };
+      // Pasting a config from another app often carries enabled:false. New rows
+      // are always enabled here; enable/disable after adding is the list toggle's job.
+      prepared.push({ name: item.name, entry: { ...checked.entry, enabled: true }, candidate });
+    }
+    if (!prepared.length) return { ok: true, saved: false, imported: [], skipped, detail: '没有新的服务' };
+    // One settings.mutate for the whole batch: a revision conflict or a bad entry
+    // can never leave half of the pasted services behind.
+    await this.write(form, prepared.map(row => ({ op: 'set', path: ['servers', row.name], value: row.entry })), undefined);
+    const warnings = [];
+    let metaDirty = false;
+    for (const row of prepared) {
+      if (!row.candidate) continue;
+      this.origins[row.name] = { app: row.candidate.source, path: row.candidate.sourcePath, importedAt: new Date().toISOString() };
+      metaDirty = true;
+    }
+    if (metaDirty) {
+      try { await this.persistMeta(); } catch { warnings.push('配置已保存，但来源记录未能写入'); }
+    }
+    const enabled = prepared.filter(row => row.entry.enabled);
+    let snapshot;
+    try { snapshot = { runtime: this.ctx.mcpManager.list(), schemas: this.toolSchemas() }; } catch { /* verification will retry on the next tick */ }
+    for (const row of enabled) this.startVerification(row.name, row.entry, undefined, snapshot);
+    this.pruneImportBatches();
+    const batchId = randomUUID();
+    this.importBatches.set(batchId, {
+      names: prepared.map(row => row.name),
+      entries: Object.fromEntries(prepared.map(row => [row.name, structuredClone(row.entry)])),
+      expiresAt: Date.now() + 10 * 60 * 1000,
+    });
+    return {
+      ok: true, saved: true, batchId, imported: prepared.map(row => row.name), skipped,
+      verifying: enabled.length > 0, draft: enabled.length === 0,
+      checks: [{ label: '配置已保存', ok: true, detail: `一次写入 ${prepared.length} 个服务` }],
+      warnings,
+    };
+  }
+  pruneImportBatches() {
+    const now = Date.now();
+    for (const [id, batch] of this.importBatches) if (batch.expiresAt <= now) this.importBatches.delete(id);
+  }
+  /**
+   * Undo one paste batch. Only entries that still equal what that batch wrote are
+   * removed; a renamed or edited entry is reported as skipped instead of being
+   * silently overwritten. The batch expires after ten minutes.
+   */
+  async undoImport(body, form, entries) {
+    this.pruneImportBatches();
+    const batch = this.importBatches.get(body.batchId);
+    if (!batch) fail('BATCH_STALE', '这次添加已失效，无法撤销');
+    const removed = [];
+    const skipped = [];
+    for (const name of batch.names) {
+      if (!Object.hasOwn(entries, name)) { skipped.push({ name, reason: '已被删除或改名' }); continue; }
+      if (JSON.stringify(entries[name]) !== JSON.stringify(batch.entries[name])) { skipped.push({ name, reason: '已被修改' }); continue; }
+      removed.push(name);
+    }
+    if (!removed.length) { this.importBatches.delete(body.batchId); return { ok: true, removed: [], skipped }; }
+    await this.write(form, removed.map(name => ({ op: 'unset', path: ['servers', name] })), undefined);
+    for (const name of removed) {
+      this.cancelVerification(name, '已撤销这次添加');
+      delete this.origins[name];
+      delete this.lastVerifications[name];
+    }
+    let warnings = [];
+    try { await this.persistMeta(); } catch { warnings.push('服务已撤销，但来源记录未能更新'); }
+    this.importBatches.delete(body.batchId);
+    return { ok: true, removed, skipped, warnings };
+  }
   /** 批量操作：启停在一次 revision 里写完，重连逐个执行并忽略单个失败。 */
   async bulk(body, form, entries) {
     const requested = Array.isArray(body.names) ? [...new Set(body.names.filter(name => typeof name === 'string'))] : [];
@@ -495,7 +645,7 @@ export class HubService {
    * 后台验证正式连接与工具注册。不占用写队列：保存立即返回，状态由 list() 的
    * verification 字段回报，并订阅 mcp-manager/status 以便第一时间结算。
    */
-  startVerification(name, expected, previousConnectedAt) {
+  startVerification(name, expected, previousConnectedAt, snapshot) {
     this.cancelVerification(name, '已被新的保存请求取代');
     // 条目显式声明了更长的启动预算时跟着放宽，避免比官方客户端的超时更早判失败。
     const declared = expected.startupTimeoutMs;
@@ -503,29 +653,57 @@ export class HubService {
     const record = { name, state: 'verifying', expected, previousConnectedAt, startedAt: Date.now(), deadline: Date.now() + budget, detail: undefined };
     this.verifications.set(name, record);
     this.statusWatchers.add(record);
-    record.timer = setInterval(() => this.checkVerification(record), Math.max(10, this.intervalMs));
-    record.timer.unref?.();
-    this.checkVerification(record);
+    this.ensureVerificationTicker();
+    this.checkVerification(record, snapshot);
     return record;
+  }
+  /**
+   * One timer for all pending verifications. A timer per record multiplied the
+   * `tools.schemas()` deep clone by the batch size; one tick reads the runtime and
+   * tool list once and evaluates every record against that snapshot.
+   */
+  ensureVerificationTicker() {
+    if (this.verificationTimer) return;
+    this.verificationTimer = setInterval(() => this.tickVerifications(), Math.max(10, this.intervalMs));
+    this.verificationTimer.unref?.();
+  }
+  stopVerificationTicker() {
+    if (!this.verificationTimer) return;
+    clearInterval(this.verificationTimer);
+    this.verificationTimer = null;
+  }
+  tickVerifications() {
+    if (this.closed || !this.statusWatchers.size) return this.stopVerificationTicker();
+    let snapshot;
+    try {
+      snapshot = { runtime: this.ctx.mcpManager.list(), schemas: this.toolSchemas() };
+    } catch (error) {
+      this.ctx.logger?.warn?.('MCP Hub 读取连接状态失败', error);
+      for (const record of [...this.statusWatchers]) this.finishVerification(record, 'failed', '读取连接状态失败，请刷新后重试');
+      return;
+    }
+    for (const record of [...this.statusWatchers]) this.checkVerification(record, snapshot);
   }
   /**
    * A throw here used to escape a bare `setInterval` and, through DSH's fail-loud
    * handler, exit the whole Host. Verification reads nothing but the manager's
    * in-memory view until it is about to decide, so it stays cheap as well as safe.
    */
-  checkVerification(record) {
+  checkVerification(record, snapshot) {
     if (record.state !== 'verifying') return;
-    try { this.evaluateVerification(record); }
+    try { this.evaluateVerification(record, snapshot); }
     catch (error) {
       this.ctx.logger?.warn?.('MCP Hub 读取连接状态失败', error);
       this.finishVerification(record, 'failed', '读取连接状态失败，请刷新后重试');
     }
   }
-  evaluateVerification(record) {
+  evaluateVerification(record, snapshot) {
     if (this.closed) return this.finishVerification(record, 'cancelled', '配置服务已关闭，验证已取消');
     if (Date.now() > record.deadline) return this.finishVerification(record, 'failed', '等待正式连接或工具注册超时，请查看诊断后重试');
     const name = record.name;
-    const live = this.ctx.mcpManager.list().find(row => row.name === name);
+    const runtime = snapshot?.runtime ?? this.ctx.mcpManager.list();
+    const schemas = snapshot?.schemas ?? this.toolSchemas();
+    const live = runtime.find(row => row.name === name);
     if (!live || live.configured === false) return this.finishVerification(record, 'failed', '验证期间条目已被移除，请刷新后查看最新状态');
     const status = live.status;
     if (status?.state === 'disabled') return this.finishVerification(record, 'cancelled', '服务已停用，验证结束');
@@ -536,7 +714,7 @@ export class HubService {
     if (status?.state === 'connected') {
       const fresh = record.previousConnectedAt === undefined || status.connectedAt !== record.previousConnectedAt;
       if (fresh && Number.isInteger(status.toolCount)) {
-        const registered = this.tools(name).length;
+        const registered = this.toolsFrom(schemas, name).length;
         if (registered === status.toolCount) {
           if (!this.stillExpected(name, record.expected)) return this.finishVerification(record, 'failed', '验证期间配置已被修改，请刷新后查看最新状态');
           return this.finishVerification(record, 'ok', `DSH 已连接，已注册 ${registered} 个工具`);
@@ -554,8 +732,8 @@ export class HubService {
   }
   finishVerification(record, state, detail) {
     if (record.state !== 'verifying') return;
-    clearInterval(record.timer);
     this.statusWatchers.delete(record);
+    if (!this.statusWatchers.size) this.stopVerificationTicker();
     Object.assign(record, { state, detail, finishedAt: Date.now() });
     this.recordVerification(record.name, { state, detail, startedAt: record.startedAt, finishedAt: record.finishedAt });
     if (state === 'failed') void this.disableIfUnchanged(record.name, record.expected, record.startedAt);
@@ -597,7 +775,12 @@ export class HubService {
   }
   /** mcp-manager/status 到达时提前结算，不必等下一次轮询。 */
   onStatus(name) {
-    for (const record of [...this.statusWatchers]) if (record.name === name) this.checkVerification(record);
+    const records = [...this.statusWatchers].filter(record => record.name === name);
+    if (records.length) {
+      let snapshot;
+      try { snapshot = { runtime: this.ctx.mcpManager.list(), schemas: this.toolSchemas() }; } catch { snapshot = undefined; }
+      for (const record of records) this.checkVerification(record, snapshot);
+    }
     this.notify();
   }
   /** Serialized: verification results and origin updates must never interleave two renames. */
@@ -605,7 +788,8 @@ export class HubService {
     if (!this.metaPath) return Promise.resolve();
     const run = async () => {
       await mkdir(dirname(this.metaPath), { recursive: true, mode: 0o700 });
-      const payload = { version: META_VERSION, origins: this.origins, verifications: this.lastVerifications };
+      const sources = this.sourceGroups.filter(source => source.manual === true && source.id.startsWith('file-'));
+      const payload = { version: META_VERSION, origins: this.origins, verifications: this.lastVerifications, sources };
       const tmp = this.metaPath + '.' + randomUUID() + '.tmp';
       try {
         await writeFile(tmp, JSON.stringify(payload, null, 2), { mode: 0o600 });
@@ -620,6 +804,7 @@ export class HubService {
     this.closed = true;
     this.probeLifetime.abort();
     for (const record of [...this.verifications.values()]) this.finishVerification(record, 'cancelled', '配置服务已关闭，验证已取消');
+    this.stopVerificationTicker();
     for (const waiter of [...this.waiters]) waiter();
     this.waiters.clear();
   }

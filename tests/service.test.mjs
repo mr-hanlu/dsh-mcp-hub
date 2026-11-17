@@ -81,6 +81,11 @@ test('draft saving is explicitly unsuccessful and disabled',async()=>{
   const {service,form}=fixture();const result=await service.mutate({...body,mode:'draft'});
   assert.equal(result.ok,false);assert.equal(result.draft,true);assert.equal(form.value.servers.demo.enabled,false);
 });
+test('a new save ignores a pasted disabled flag unless a draft is explicit',async()=>{
+  const {service,form}=fixture();
+  const result=await service.mutate({...body,entry:{...body.entry,enabled:false}});
+  assert.equal(result.ok,true);assert.equal(form.value.servers.demo.enabled,true);
+});
 test('editing a disabled service preserves its disabled state',async()=>{
   const {service,form}=fixture({servers:{demo:{...body.entry,enabled:false}}});
   const result=await service.mutate({...body,originalName:'demo',entry:{...body.entry,enabled:false}});
@@ -94,6 +99,68 @@ test('cached import membership is recomputed after deletion without rescanning o
   await service.mutate({action:'remove',name:'demo',revision:1});
   const refreshed=await service.sources();
   assert.equal(refreshed.sources[0].candidates[0].id,id);assert.equal(refreshed.sources[0].candidates[0].duplicate,undefined);
+});
+test('a backup entry with omitted credentials is recognized as the same connection',async()=>{
+  const existing={...body.entry,headers:{Authorization:'Bearer ${env:MCP_HUB_TEST_TOKEN}'}};
+  const {service}=fixture({servers:{demo:existing}});
+  const imported=await service.parseFile({filename:'backup.json',text:JSON.stringify({mcpServers:{demo:{...body.entry,headers:{}}}})});
+  const candidate=imported.sources[0].candidates[0];
+  assert.equal(candidate.duplicate,'demo');
+  assert.equal(candidate.nameConflict,false);
+  assert.equal(candidate.credentialOmitted,true);
+});
+test('batch import writes every new service in one revision and skips existing names',async()=>{
+  const {service,form,writes}=fixture({servers:{demo:body.entry}});
+  const result=await service.mutate({action:'import',revision:1,entries:[
+    {name:'alpha',entry:{transport:'streamable-http',url:'https://alpha.example/mcp',headers:{},enabled:false}},
+    {name:'demo',entry:body.entry},
+    {name:'beta',entry:{transport:'streamable-http',url:'https://beta.example/mcp',headers:{}}},
+  ]});
+  assert.equal(result.ok,true);assert.equal(result.saved,true);
+  assert.deepEqual(result.imported,['alpha','beta']);assert.equal(result.skipped[0].name,'demo');
+  assert.equal(writes.length,1);assert.equal(writes[0].length,2);
+  assert.ok(form.value.servers.alpha);assert.ok(form.value.servers.beta);assert.ok(form.value.servers.demo);
+  assert.equal(form.value.servers.alpha.enabled,true);
+  const listed=(await service.list()).servers.find(row=>row.name==='alpha');
+  assert.equal(listed.entry.enabled,true);assert.equal(listed.editable,true);
+});
+test('undoing a batch removes only the entries the batch still owns',async()=>{
+  const {service,form,writes}=fixture();
+  const first=await service.mutate({action:'import',revision:1,entries:[
+    {name:'alpha',entry:{transport:'streamable-http',url:'https://alpha.example/mcp',headers:{},enabled:false}},
+    {name:'beta',entry:{transport:'streamable-http',url:'https://beta.example/mcp',headers:{}}},
+  ]});
+  assert.ok(first.batchId);
+  form.value.servers.beta.url='https://changed.example/mcp';
+  const undo=await service.mutate({action:'undo-import',revision:form.revision,batchId:first.batchId});
+  assert.deepEqual(undo.removed,['alpha']);assert.equal(undo.skipped[0].name,'beta');
+  assert.equal(Object.hasOwn(form.value.servers,'alpha'),false);assert.ok(form.value.servers.beta);
+  assert.equal(writes.length,2);
+});
+test('one invalid row aborts a batch import without writing anything',async()=>{
+  const {service,writes}=fixture();
+  const result=await service.mutate({action:'import',revision:1,entries:[
+    {name:'alpha',entry:{transport:'streamable-http',url:'https://alpha.example/mcp',headers:{},enabled:false}},
+    {name:'bad name',entry:{transport:'streamable-http',url:'https://bad.example/mcp',headers:{}}},
+  ]});
+  assert.equal(result.ok,false);assert.equal(result.saved,false);assert.equal(result.failed.name,'bad name');assert.equal(writes.length,0);
+});
+test('a batch with duplicate names is refused before writing',async()=>{
+  const {service,writes}=fixture();
+  const entry={transport:'streamable-http',url:'https://same.example/mcp',headers:{}};
+  await assert.rejects(service.mutate({action:'import',revision:1,entries:[{name:'same',entry},{name:'same',entry}]}),/重复/);
+  assert.equal(writes.length,0);
+});
+test('only a manually imported source can be removed',async()=>{
+  const {service}=fixture();
+  const imported=await service.parseFile({filename:'manual.json',text:JSON.stringify({mcpServers:{copy:body.entry}})});
+  const source=imported.sources[0];
+  assert.equal(source.manual,true);
+  const result=await service.removeSource(source.id);
+  assert.deepEqual(result.sources,[]);
+  service.sourceGroups.push({id:'file-auto',name:'自动扫描',manual:false,files:[],candidates:[]});
+  await assert.rejects(()=>service.removeSource('file-auto'),/自动扫描/);
+  assert.equal(service.sourceGroups.length,1);
 });
 test('explicit reveal reads exactly the selected value and subsequent edits restore the latest saved value',async()=>{
   const entry={...body.entry,headers:{Authorization:'old-token'}};
@@ -112,14 +179,46 @@ test('list does not leak secret headers, args, env or diagnostic values',async()
   const {service}=fixture({servers:{demo:entry},status:{state:'failed',lastError:'thisisasecret headsecret --key=argsecret'}});
   const result=JSON.stringify(await service.list());for(const value of ['thisisasecret','headsecret','argsecret'])assert.ok(!result.includes(value));
 });
+test('export omits credentials by default and includes them only on request',async()=>{
+  const entry={...body.entry,headers:{Authorization:'Bearer real-token'},env:{API_KEY:'secret'}};
+  const {service}=fixture({servers:{demo:entry}});
+  const safe=await service.exportBackup({});
+  assert.equal(safe.includeSecrets,false);
+  assert.equal(safe.backup.demo.headers.Authorization,undefined);
+  assert.equal(safe.backup.demo.env.API_KEY,undefined);
+  assert.ok(safe.omitted.length>0);
+  const full=await service.exportBackup({includeSecrets:true});
+  assert.equal(full.includeSecrets,true);
+  assert.equal(full.backup.demo.headers.Authorization,'Bearer real-token');
+  assert.equal(full.backup.demo.env.API_KEY,'secret');
+  assert.deepEqual(full.omitted,[]);
+});
 test('API uses official owner-only Fetch routes for browser and desktop',()=>{
   const routes=[];
   apply({inject:()=>{},effect:fn=>fn(),connection:{fetch:{register:route=>{routes.push(route);return ()=>{};}}}});
-  assert.equal(routes.length,12);assert.ok(routes.every(route=>route.path.startsWith('/api/dsh-mcp-hub/')));
+  assert.equal(routes.length,16);assert.ok(routes.every(route=>route.path.startsWith('/api/dsh-mcp-hub/')));
   assert.deepEqual(routes.find(route=>route.path.endsWith('/mutate')).methods,['POST']);
   assert.deepEqual(routes.find(route=>route.path.endsWith('/servers')).methods,['GET']);
   assert.deepEqual(routes.find(route=>route.path.endsWith('/wait')).methods,['POST']);
   assert.deepEqual(routes.find(route=>route.path.endsWith('/tools')).methods,['POST']);
+});
+test('source removal route awaits the service result',async()=>{
+  const req=new Request('http://localhost/api/dsh-mcp-hub/source-remove',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({id:'file-1'})});
+  const response=await createHandler(()=>({removeSource:async()=>{await new Promise(resolve=>setTimeout(resolve,1));return {sources:[]};}}),'source-remove')(req);
+  assert.equal(response.status,200);assert.deepEqual(await response.json(),{sources:[]});
+});
+test('catalog routes pass the query and request signal to the registry client',async()=>{
+  const calls=[];
+  const service={maxConfigBytes:1024,
+    catalogSearch:async(body,signal)=>{calls.push(['search',body,signal]);return {items:[],query:body.query};},
+    catalogDetail:async(body,signal)=>{calls.push(['detail',body,signal]);return {item:{name:body.name}};}};
+  const searchRequest=new Request('http://localhost/api/dsh-mcp-hub/catalog-search',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({query:'filesystem',limit:5})});
+  const search=await createHandler(()=>service,'catalog-search')(searchRequest);
+  assert.equal(search.status,200);assert.equal((await search.json()).query,'filesystem');
+  const detailRequest=new Request('http://localhost/api/dsh-mcp-hub/catalog-detail',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({name:'io.github.acme/fs'})});
+  const detail=await createHandler(()=>service,'catalog-detail')(detailRequest);
+  assert.equal(detail.status,200);assert.deepEqual(await detail.json(),{item:{name:'io.github.acme/fs'}});
+  assert.equal(calls[0][1].limit,5);assert.ok(calls[0][2] instanceof AbortSignal);assert.equal(calls[1][1].name,'io.github.acme/fs');
 });
 test('API refuses unavailable services and masks foreign parse exceptions',async()=>{
   const req=new Request('http://localhost/api/dsh-mcp-hub/scan',{method:'POST',headers:{'content-type':'application/json'},body:'{}'});
@@ -258,6 +357,26 @@ test('the last verification is persisted for the next Host run', async () => {
   } finally { await rm(home,{recursive:true,force:true}); }
 });
 
+test('manual imported sources survive a Host restart', async () => {
+  const {mkdtemp,rm}=await import('node:fs/promises');const {tmpdir}=await import('node:os');const {join}=await import('node:path');
+  const home=await mkdtemp(join(tmpdir(),'mcp-hub-sources-'));
+  try {
+    const metaPath=join(home,'.dsh','mcp-hub','test','sources.json');
+    const first=fixture({metaPath});
+    const imported=await first.service.parseFile({filename:'manual.json',text:JSON.stringify({mcpServers:{copy:body.entry}})});
+    const id=imported.sources[0].id;
+    assert.equal(imported.sources[0].manual,true);
+    const second=new HubService(first.service.ctx,{metaPath,waitMs:8,intervalMs:1,env:{}});
+    await second.init();
+    const restored=await second.sources();
+    assert.equal(restored.sources.length,1);assert.equal(restored.sources[0].id,id);
+    assert.equal(restored.sources[0].candidates[0].name,'copy');
+    await second.removeSource(id);
+    const third=new HubService(first.service.ctx,{metaPath,waitMs:8,intervalMs:1,env:{}});
+    await third.init();
+    assert.deepEqual((await third.sources()).sources,[]);
+  } finally { await rm(home,{recursive:true,force:true}); }
+});
 test('a manager cleanup failure is explained in Chinese, not as a raw enum', async () => {
   const {service}=fixture({extraRows:[{name:'gone',configured:false,status:{state:'failed',reason:'cleanup',result:{closeConfirmed:false,cleanupError:'busy'}}}]});
   const row=(await service.list()).servers.find(entry=>entry.name==='gone');

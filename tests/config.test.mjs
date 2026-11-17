@@ -175,3 +175,50 @@ test('Claude project-scoped servers are imported with a scoped name', async () =
     assert.deepEqual(claude.candidates.find(row => row.name === 'demo-app').entry.args, ['a.js']);
   } finally { await rm(home, { recursive: true, force: true }); }
 });
+
+test('scans Claude Desktop, Gemini, VS Code, Windsurf and Copilot CLI on macOS', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'mcp-hub-multi-'));
+  const write = async (path, data) => {
+    await mkdir(join(home, path.split('/').slice(0, -1).join('/')), { recursive: true });
+    await writeFile(join(home, path), typeof data === 'string' ? data : JSON.stringify(data));
+  };
+  try {
+    await write('Library/Application Support/Claude/claude_desktop_config.json', { mcpServers: { claudeDesktop: { command: 'node', args: [] } } });
+    await write('.gemini/settings.json', { mcpServers: { geminiRemote: { httpUrl: 'https://gemini.example/mcp' } } });
+    await write('Library/Application Support/Code/User/mcp.json', { servers: { vscodeLocal: { type: 'stdio', command: 'node', args: [] } } });
+    await write('.codeium/windsurf/mcp_config.json', { mcpServers: { windsurfRemote: { serverUrl: 'https://windsurf.example/mcp' } } });
+    await write('.copilot/mcp-config.json', { mcpServers: { copilotCli: { command: 'node', args: [] } } });
+    const sources = await scanSources({ home, env: {}, platform: 'darwin' });
+    const byId = Object.fromEntries(sources.map(source => [source.id, source]));
+    assert.deepEqual(byId['claude-desktop'].candidates.map(row => row.name), ['claudeDesktop']);
+    assert.deepEqual(byId.gemini.candidates.map(row => row.name), ['geminiRemote']);
+    assert.equal(byId.gemini.candidates[0].entry.transport, 'streamable-http');
+    assert.equal(byId.gemini.candidates[0].entry.url, 'https://gemini.example/mcp');
+    assert.deepEqual(byId.vscode.candidates.map(row => row.name), ['vscodeLocal']);
+    assert.deepEqual(byId.windsurf.candidates.map(row => row.name), ['windsurfRemote']);
+    assert.equal(byId.windsurf.candidates[0].entry.url, 'https://windsurf.example/mcp');
+    assert.deepEqual(byId['copilot-cli'].candidates.map(row => row.name), ['copilotCli']);
+  } finally { await rm(home, { recursive: true, force: true }); }
+});
+
+test('project scan includes Gemini and OpenCode workspace configs', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'mcp-hub-project-extra-'));
+  try {
+    await mkdir(join(root, '.gemini'), { recursive: true });
+    await writeFile(join(root, '.gemini/settings.json'), JSON.stringify({ mcpServers: { geminiProject: { command: 'node', args: [] } } }));
+    await writeFile(join(root, 'opencode.json'), JSON.stringify({ mcp: { opencodeProject: { type: 'local', command: ['node', 'server.js'] } } }));
+    const sources = await scanSources({ home: join(root, 'nohome'), env: {}, cwd: root, platform: 'darwin' });
+    const project = sources.find(source => source.id === 'project');
+    assert.deepEqual(project.candidates.map(row => row.name).sort(), ['geminiProject', 'opencodeProject']);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('Gemini httpUrl and Windsurf serverUrl aliases normalize as HTTP', () => {
+  const [gemini] = extract({ mcpServers: { remote: { httpUrl: 'https://gemini.example/mcp', headers: { Authorization: 'Bearer ${env:TOKEN}' } } } });
+  assert.equal(gemini.entry.transport, 'streamable-http');
+  assert.equal(gemini.entry.url, 'https://gemini.example/mcp');
+  assert.equal(gemini.entry.headers.Authorization, 'Bearer ${env:TOKEN}');
+  const [windsurf] = extract({ mcpServers: { remote: { serverUrl: 'https://windsurf.example/mcp' } } });
+  assert.equal(windsurf.entry.transport, 'streamable-http');
+  assert.equal(windsurf.entry.url, 'https://windsurf.example/mcp');
+});

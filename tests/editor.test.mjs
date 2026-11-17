@@ -26,6 +26,12 @@ test('direct configurations infer transport and keep native runtime settings',()
 test('multiple servers are returned rather than silently reduced to the first',()=>{
   assert.equal(parseEditorDocument(JSON.stringify({...amap,other:{url:'https://example.com/mcp'}})).length,2);
 });
-test('unrecognized and structurally invalid JSON are rejected before altering the form',()=>{
-  for(const document of [{},null,[],{env:{TOKEN:'x'}},{bad:{command:'node',env:['bad']}}]) assert.throws(()=>parseEditorDocument(JSON.stringify(document)));
+test('unrecognized documents are rejected, while one bad service row does not discard the others',()=>{
+  for(const document of [{},null,[],{env:{TOKEN:'x'}}]) assert.throws(()=>parseEditorDocument(JSON.stringify(document)));
+  const rows=parseEditorDocument(JSON.stringify({bad:{command:'node',env:['bad']},good:{command:'node',args:['server.mjs']}}));
+  assert.equal(rows.length,2);
+  const bad=rows.find(row=>row.name==='bad'),good=rows.find(row=>row.name==='good');
+  assert.equal(bad.invalid,true);assert.ok(bad.issues[0].includes('无法解析'));
+  assert.equal(good.invalid,undefined);assert.equal(good.entry.transport,'stdio');
+  assert.deepEqual(bad.path,['bad']);
 });

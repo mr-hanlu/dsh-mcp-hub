@@ -10,7 +10,8 @@ const PREFIX = '/api/dsh-mcp-hub';
 const ROUTES = [
   ['servers', 'GET'], ['sources', 'GET'], ['status', 'GET'],
   ['scan', 'POST'], ['parse', 'POST'], ['test', 'POST'], ['reveal', 'POST'],
-  ['mutate', 'POST'], ['cancel', 'POST'], ['probe', 'POST'], ['tools', 'POST'], ['wait', 'POST'],
+  ['mutate', 'POST'], ['cancel', 'POST'], ['probe', 'POST'], ['tools', 'POST'], ['wait', 'POST'], ['source-remove', 'POST'], ['export', 'POST'],
+  ['catalog-search', 'POST'], ['catalog-detail', 'POST'],
 ];
 
 /** 用户可在 profile 的 cordis.patch.yml 中覆盖；patch 层跨升级保留。 */
@@ -27,6 +28,12 @@ export const Config = z.object({
     .description('单个配置文件与请求体的上限（字节）'),
   referenceStorage: z.union(['template', 'value']).default('template')
     .description('引用保存方式：template 保留 ${credential:…} 模板（推荐，配置里不出现密钥）；value 在保存时写入当前值'),
+  catalogBaseUrl: z.string().default('https://registry.modelcontextprotocol.io')
+    .description('官方 MCP Registry 地址；插件只读取目录，不提交任何内容'),
+  catalogTimeoutMs: z.number().min(2000).max(60000).default(8000)
+    .description('在线搜索与详情请求的超时时间（毫秒）'),
+  catalogCacheMs: z.number().min(0).max(3600000).default(300000)
+    .description('在线搜索/详情缓存时间（毫秒）；0 表示不缓存'),
 });
 
 export function createHandler(getService, route, log) {
@@ -46,6 +53,10 @@ export function createHandler(getService, route, log) {
       if (!body || typeof body !== 'object' || Array.isArray(body)) fail('REQUEST_INVALID', '无效请求');
       if (route === 'scan') return send(200, await service.scan());
       if (route === 'parse') return send(200, await service.parseFile(body));
+      if (route === 'source-remove') return send(200, await service.removeSource(body.id));
+      if (route === 'export') return send(200, await service.exportBackup(body));
+      if (route === 'catalog-search') return send(200, await service.catalogSearch(body, request.signal));
+      if (route === 'catalog-detail') return send(200, await service.catalogDetail(body, request.signal));
       if (route === 'test') return send(200, await service.test(body, request.signal));
       if (route === 'reveal') return send(200, service.reveal(body));
       if (route === 'mutate') return send(200, await service.mutate(body));
@@ -72,6 +83,9 @@ export function apply(ctx, config = {}) {
     maxConfigBytes: config.maxConfigBytes,
     referenceStorage: config.referenceStorage,
     probeTimeoutMs: config.probeTimeoutMs,
+    catalogBaseUrl: config.catalogBaseUrl,
+    catalogTimeoutMs: config.catalogTimeoutMs,
+    catalogCacheMs: config.catalogCacheMs,
   };
   // Only the services this plugin cannot work without are hard dependencies.
   // `profileContext` exists only in a profile-launched Host and `configEditor` is an

@@ -13,7 +13,12 @@ test('a successful handshake without confirmed cleanup does not pass',async()=>{
 });
 test('the official probe rejects an existing executable that is not an MCP server',async()=>{
   const result=await testConnection({get:()=>undefined},'not-mcp',{transport:'stdio',command:process.execPath,args:['-e','process.exit(0)'],env:{}},{timeoutMs:2000});
-  assert.equal(result.ok,false);assert.equal(result.checks.find(check=>check.label==='MCP 握手与工具发现').ok,false);
+  assert.equal(result.ok,false);assert.equal(result.connectionOk,false);assert.equal(result.checks.find(check=>check.label==='MCP 连接').ok,false);
+});
+test('a tools/list failure still counts as connected and can be added',async()=>{
+  const result=await testConnection({},'demo',{transport:'streamable-http',url:'https://example.com/mcp'},{probe:async()=>({ok:false,stage:'list',message:'tools unavailable',toolNames:[],closeConfirmed:true})});
+  assert.equal(result.connectionOk,true);assert.equal(result.cleanupOk,true);assert.equal(result.capability,'failed');
+  assert.equal(result.ok,true);assert.equal(result.checks.find(check=>check.label==='工具发现').ok,false);
 });
 
 test('probe reports the entry that would be written',async()=>{
