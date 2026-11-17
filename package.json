@@ -36,26 +36,41 @@
     "test": "node --test tests/*.test.mjs",
     "test:integration": "node --test tests/integration/*.test.mjs",
     "check": "node scripts/check.mjs",
-    "prepack": "node scripts/build.mjs"
+    "prepack": "node scripts/build.mjs",
+    "test:e2e": "node tests/e2e/web-profile.e2e.mjs",
+    "test:ui": "node tests/e2e/ui-page.e2e.mjs"
   },
   "dependencies": {
-    "@deepseek-ai/dsh-mcp-client": "0.2.2-rc.3",
-    "@deepseek-ai/schemastery": "^3.19.0",
     "jsonc-parser": "^3.3.1",
     "smol-toml": "^1.7.0"
   },
   "devDependencies": {
+    "@deepseek-ai/dsh-mcp-client": "0.2.2-rc.3",
+    "@deepseek-ai/schemastery": "^3.19.0",
     "esbuild": "^0.25.0",
+    "puppeteer-core": "^24.43.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
   "peerDependencies": {
-    "@deepseek-ai/dsh": ">=0.2.2-0 <0.3.0-0"
+    "@deepseek-ai/dsh": ">=0.2.2-0 <0.3.0-0",
+    "@deepseek-ai/dsh-mcp-client": ">=0.2.2-0 <0.3.0-0",
+    "@deepseek-ai/schemastery": "^3.19.0"
   },
   "peerDependenciesMeta": {
     "@deepseek-ai/dsh": {
       "optional": true
+    },
+    "@deepseek-ai/dsh-mcp-client": {
+      "optional": true
+    },
+    "@deepseek-ai/schemastery": {
+      "optional": true
     }
+  },
+  "engines": {
+    "dsh": ">=0.2.2-0 <0.3.0-0",
+    "node": "^22.19.0 || >=24.0.0"
   },
   "dsh": {
     "bundle": {

@@ -20,26 +20,106 @@ DSH 的 MCP 可视化管理与本机配置导入插件。提供「已添加」�
 
 ## 安装
 
-需要提供官方 `mcpManager`、`settings`、`configEditor`、`tools`、`profileContext` 和 Connection Fetch 路由的 DSH 0.2.2。真实集成测试使用官方 **0.2.2-rc.3** 包。
+### 需要什么
+
+- DSH **0.2.2** 系（当前验证版本 `0.2.2-rc.3`）。插件依赖官方的 `mcpManager`、`settings`、`tools`、`connection`，以及可选的 `profileContext`、`credentials`、`configEditor`。
+- Node `^22.19.0 || >=24` 与 npm，仅用于 `npm ci`、构建和测试；插件本身在 DSH Host 内运行。
+- 只支持 `stdio` 与 `streamable-http`；`sse` 明确不支持。
+
+### 先构建（必须）
 
 ```sh
+git clone https://github.com/mr-hanlu/dsh-mcp-hub.git
+cd dsh-mcp-hub
 npm ci
-npm run build
-npm pack
-dsh plugin --profile desktop add ./dsh-mcp-hub-0.1.0.tgz
+npm run build     # 生成 lib/client.js 与 lib/style.css —— 插件页加载的就是这两个文件
 ```
 
-打开 DSH **设置 → MCP Hub**。Web 用户将 profile 改为 `web`。如果使用桌面应用自带的 CLI，请使用其已配置的 `dsh` 命令执行安装。
+`npm test`、`npm run check` 可选，用来确认这台机器上解析、脱敏和 Host 逻辑正常。
 
-未自动安装进现有 DSH profile。安装不迁移或删除其他 MCP 管理插件的配置；Hub 只管理官方 Manager 所拥有的服务。插件注册的服务只读，继承配置只能停用，不能通过此页删除。静态 mcp-client 与 Agent preset 中的服务不属于官方 Manager 的完整管理范围。
+### 方式 A：装进桌面应用（日常使用，也是唯一的真实验收方式）
 
-## 本地界面预览
+桌面应用**独占** `desktop` profile，`dsh plugin` 命令不能操作它（会返回 `profile "desktop" is managed exclusively by the Electron application`）。所以走界面安装：
+
+1. 打开 DSH，进入侧边栏的**插件**页。
+2. 点**添加插件**，输入本仓库的绝对路径（例如 `/Users/<you>/Desktop/my/dsh-mcp-hub`），确认。
+3. 列表出现 **MCP Hub** 行，确认是启用状态。本地目录是 **link 安装**：改代码后要重新 `npm run build`，并重启 DSH，才会加载新代码。
+4. 打开**设置 → MCP Hub**。
+
+卸载：在插件页卸载该插件。卸载不会删除已经保存到官方 MCP Manager 的服务配置，也不会动其他 MCP 管理插件的数据。
+
+### 方式 B：自己建一个 CLI profile（不碰日常 profile）
+
+适合 headless / Web 运行或隔离验证：
 
 ```sh
-npm run dev
+DSH="/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh"   # 桌面应用自带的 CLI
+"$DSH" plugin --profile hub-dev add /Users/<you>/Desktop/my/dsh-mcp-hub
+"$DSH" --profile hub-dev --dump-config | grep -n "dsh-mcp-hub"
+"$DSH" --profile hub-dev web
 ```
 
-访问 <http://127.0.0.1:4173>（页面标题为「界面预览」）。预览的初始列表是示例数据；点击「测试连接」或添加启用的服务时，会在本机真实启动 / 连接 MCP，完成握手和工具发现后关闭连接。不会写入现有 DSH 配置，预览列表仅在当前页面会话中保存；不再模拟连接成功。普通环境变量引用读取预览进程环境，DSH 凭证引用需要在实际 DSH 中验证。
+- 第一次使用会初始化 `hub-dev`，首个组合包是 `@deepseek-ai/dsh-base`。
+- 只想看组合结果、不启动：`--dump-config`。被版本检查拒绝的插件行仍会打印，被拒绝的组合包不提供任何行。
+- 删除：`"$DSH" plugin --profile hub-dev remove dsh-mcp-hub`。
+- `dsh` 已在 PATH 时，去掉 `DSH=` 前缀即可。
+
+### 方式 C：打包安装（验证真实发布形态）
+
+```sh
+npm pack     # prepack 会自动 build
+```
+
+在**添加插件**里输入 tarball 的绝对路径（如 `/Users/<you>/dsh-mcp-hub-0.1.0.tgz`）。tarball 不 link，`package.json` 的 `files` 白名单生效，因此打包后请确认 `lib/`、`cordis.patch.yml`、`locale/`、`docs/`、`icon.svg` 都在包内。
+
+### 装好之后先确认这几件事
+
+- 列表能显示官方 Manager 里已有的服务，且不重复列出插件注册的服务。
+- 加一个本地 stdio 服务：测试连接 → 保存 → 行状态从「验证中」变成「验证通过」，工具数量与详情一致。
+- 停用、重启、删除都生效；重启 DSH 后 `$DSH_HOME/mcp-hub/<profile>/sources.json` 里的来源记录仍在。
+- 需要 Bearer token 的远程服务：配置里出现的是 `${credential:...}` 引用，不是明文。
+
+### 版本兼容与依赖边界
+
+插件**不绑定**某一个 DSH 版本，而是声明一个兼容范围：
+
+- `package.json` 的 `engines.dsh` 是唯一判据（本文为 `>=0.2.2-0 <0.3.0-0`）。安装和 profile 启动时 DSH 会拿它与运行时版本比较，不满足就拒绝，并列出未满足项；被拒绝的插件不会被导入。
+- 不写 `engines.dsh` 时，DSH 改为校验 `peerDependencies` 里**每一个** `@deepseek-ai/dsh*` 范围。
+- 官方包（`@deepseek-ai/dsh*`、`@deepseek-ai/schemastery`）声明为 `peerDependencies`，并在 `devDependencies` 留一份供本地构建与测试。运行时用的是**安装自带的副本**，插件不自带第二份；只有 `jsonc-parser`、`smol-toml` 这类第三方库进 `dependencies`。注意：以**本地目录（link）**安装时，仓库自己的 `node_modules` 更近，解析会先用 dev 副本；只有 tarball / 注册表安装才换成宿主副本。所以"宿主副本是否兼容"要靠打包安装来验，不能只看本地开发跑通。
+- 确实要跨过范围验证时，用官方豁免：
+
+```sh
+"$DSH" plugin --profile hub-dev allow-version dsh-mcp-hub@0.1.0 --dsh-version 0.2.2-rc.3 --accept-risk
+```
+
+豁免写在 profile 自己的 `compatibility.json`，不继承到新版本，升级后需要重新授权。DSH 升级前后的破坏点以安装目录里的 `docs/upgrade-guide/` 为准。
+
+安装不迁移或删除其他 MCP 管理插件的配置；Hub 只管理官方 Manager 所拥有的服务。插件注册的服务只读，继承配置只能停用，不能通过此页删除。静态 mcp-client 与 Agent preset 中的服务不属于官方 Manager 的完整管理范围。
+
+## 验证方式
+
+官方推荐的验证顺序是：**单元 / 集成测试 → 装进真实 profile → 在真实页面上验收**。自建的网页预览只是开发辅助，不能代替验收。
+
+1. **单元测试与语法检查**：`npm test`、`npm run check`、`npm run build`。覆盖解析、脱敏、引用改写、并发写入、推送通道等 Host 与共享层逻辑。
+2. **端到端 · 接口层**：`npm run test:e2e` 会建一个临时 `DSH_HOME`，从 `web` 模板初始化 profile、把本仓库 link 进去、启动真实 Host，然后用真实的 `/api/dsh-mcp-hub/*` 路由跑完：
+   - **stdio**：列表 → 扫描 → 测试连接 → 添加 → 后台验证 → 读工具 → 停用 → 启用 → 重启 → 删除；
+   - **Streamable HTTP**：静态 Bearer 头、`${credential:…}` 模板（配置里保留模板，不落明文）、凭证轮换后客户端自行重连、错误 token 被判定为「需要认证」并立即结算。
+
+   结束删除临时目录并退出。
+3. **端到端 · 页面层**：`npm run test:ui` 在同一套临时 profile 上启动无头 Chrome，真的点一遍：设置 → MCP Hub、空状态、`本地导入` 页签、JSON 粘贴 → 逐行测试 → 一次添加两个、行内「已连接」、删除确认弹窗、删完回到空状态，并验证 JSON / 表单两个页签切换后草稿还在。依赖 `puppeteer-core`（devDependency）与本机 Chrome，可用 `CHROME_PATH` 指定；端口与 profile 都在临时目录里。
+   两条端到端都可跳过：找不到 `dsh` 时打印 SKIP 并以 0 退出，用 `DSH_BIN` 指定其他 launcher。
+4. **真实集成测试**：在临时 profile 里启动受控 MCP 子进程，走一遍写入、连接、工具注册、停用、删除。依赖装在独立目录，不随插件发布：
+
+```sh
+npm install --prefix /tmp/dsh-mcp-hub-smoke --ignore-scripts \
+  @deepseek-ai/cordis @deepseek-ai/dsh-mcp-manager@0.2.2-rc.3 \
+  @deepseek-ai/dsh-app-boot@0.2.2-rc.3 @deepseek-ai/dsh-config-editor@0.2.2-rc.3 \
+  @deepseek-ai/dsh-settings@0.2.2-rc.3
+DSH_TEST_MODULES=/tmp/dsh-mcp-hub-smoke npm run test:integration
+```
+
+5. **真实 profile 验收**（唯一能说明"用户实际看到什么"的方式）：按上面的**方式 A** 装进桌面 profile，检查设置页、样式、主题、重启恢复、凭证引用，以及和官方 Manager 已有服务、插件注册服务、继承配置的边界。CLI profile 可以用 `--dump-config` 先确认层组合，再启动看到实际页面。桌面页面的 origin 是 `dsh-app://app`，没有可复用的 HTTP 地址；需要脚本化时用第 2 条的临时 profile，而不是桌面实例。
+6. **预览页（仅开发辅助）**：`npm run dev` 后访问 <http://127.0.0.1:4173>。初始列表是示例数据；点「测试连接」会在本机真实启动 MCP 并关闭，不写入 DSH。它没有真实的 DSH 凭证服务、没有安装后的设置页环境，因此不能作为验收依据。官方文档同样不建议用自建预览页替代安装后的验证。
 
 ## 导入与验证
 
@@ -107,19 +187,9 @@ npm run check
 npm run build
 ```
 
-单元测试覆盖配置解析、脱敏往返、环境变量与凭据判定、项目级导入、冲突、失败状态、Schema 默认值、旧连接误判、工具注册等待、坏条目容错、验证结果持久化、推送通道、复诊和官方 Fetch 路由注册（当前 99 项）。
+单元测试覆盖配置解析、脱敏往返、环境变量与凭据判定、项目级导入、冲突、失败状态、Schema 默认值、旧连接误判、工具注册等待、坏条目容错、验证结果持久化、推送通道、复诊和官方 Fetch 路由注册（当前 101 项）。
 
-真实集成测试在临时 profile 中启动受控 MCP 子进程，验证官方 Settings 持久化、连接、工具注册、重复检测和停用。依赖安装在独立目录，不随插件发布：
-
-```sh
-npm install --prefix /tmp/dsh-mcp-hub-smoke --ignore-scripts \
-  @deepseek-ai/cordis \
-  @deepseek-ai/dsh-mcp-manager@0.2.2-rc.3 \
-  @deepseek-ai/dsh-app-boot@0.2.2-rc.3 \
-  @deepseek-ai/dsh-config-editor@0.2.2-rc.3 \
-  @deepseek-ai/dsh-settings@0.2.2-rc.3
-DSH_TEST_MODULES=/tmp/dsh-mcp-hub-smoke npm run test:integration
-```
+真实集成测试在临时 profile 中启动受控 MCP 子进程，验证官方 Settings 持久化、连接、工具注册、重复检测和停用。依赖装在独立目录、不随插件发布，准备方式和运行命令见上文[验证方式](#验证方式)第 2 条。
 
 Host 通过官方 `connection.fetch.register` 注册仅 owner 可访问、位于 `/api` 下的精确路由；桌面页面和 Web 页面都经同一条本地 HTTP 通道访问，没有单独的桌面 IPC 分发路径。配置修改通过 `settings.mutate` 携带 revision，连接生命周期由 `mcpManager` 管理。已知失败原因返回结构化 `code`，未知异常只记日志并返回通用提示。
 
@@ -140,7 +210,7 @@ Host 通过官方 `connection.fetch.register` 注册仅 owner 可访问、位于
 
 ## 后续范围
 
-完整 OAuth 登录、单工具权限管理与 Tool Search 不包含在此版本，界面上也不保留相应占位入口。在线搜索只读取官方 MCP Registry 的公开目录，不维护私有目录、不下载或执行安装脚本，也不判断服务安全性。项目级发现只覆盖启动目录下的已知文件，不递归遍历，也不能在界面里切换扫描范围；备份恢复依赖「本地导入」。
+本版本不含完整 OAuth 登录：远程服务只支持静态 env / headers 与 DSH 凭证引用，授权、刷新、过期与 401 重授权在计划里（见 [开发计划](docs/DEVELOPMENT_PLAN_2026-11-17.md)）。单工具权限管理与 Tool Search 也不包含，界面上不保留占位入口。在线搜索只读取官方 MCP Registry 的公开目录，不维护私有目录、不下载或执行安装脚本，也不判断服务安全性。项目级发现只覆盖启动目录下的已知文件，不递归遍历，也不能在界面里切换扫描范围；备份恢复依赖「本地导入」。
 
 ## 官方参考
 

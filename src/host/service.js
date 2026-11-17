@@ -19,6 +19,11 @@ const REASON_TEXT = {
   'unclosed-generation': '上次连接未确认关闭，已阻止替换',
 };
 const STATUS_WITH_ERROR = ['failed', 'reconnecting', 'waiting-credentials'];
+/**
+ * 认证类失败的识别口径：DSH 的 MCP 客户端没有 needs-auth 状态，只把原因写进
+ * `lastError`；这里按文本归类，认不出时保留原文，绝不假装是别的原因。
+ */
+const AUTH_FAILURE = /(?:^|\D)(?:401|403|unauthori[sz]ed|invalid[_ -]?token|authenticat)/i;
 const META_VERSION = 1;
 const MAX_PERSISTED_VERIFICATIONS = 100;
 
@@ -454,8 +459,15 @@ export class HubService {
   async mutate(body) {
     return this.serialize(async () => {
       const form = this.descriptor({ fresh: true });
-      if (!Number.isInteger(body.revision) || body.revision !== form.revision) fail('REVISION_CONFLICT', '配置已发生变化，请刷新列表并重新核对后保存');
       const entries = form.value?.servers ?? {};
+      // 重启不改配置，是幂等动作：它不需要 revision，否则并发下会被当成「保存冲突」拒掉。
+      if (body.action === 'restart') {
+        if (!Object.hasOwn(entries, body.name)) fail('NOT_WRITABLE', '此服务由其他插件管理，无法在此修改');
+        await this.ctx.mcpManager.restart(body.name);
+        this.notify();
+        return { ok: true };
+      }
+      if (!Number.isInteger(body.revision) || body.revision !== form.revision) fail('REVISION_CONFLICT', '配置已发生变化，请刷新列表并重新核对后保存');
       if (body.action === 'import') return this.importBatch(body, form, entries);
       if (body.action === 'undo-import') return this.undoImport(body, form, entries);
       const exists = Object.hasOwn(entries, body.name);
@@ -709,7 +721,18 @@ export class HubService {
     if (status?.state === 'disabled') return this.finishVerification(record, 'cancelled', '服务已停用，验证结束');
     if (status?.state === 'failed' || status?.state === 'waiting-credentials') {
       if (!this.stillExpected(name, record.expected)) return this.finishVerification(record, 'failed', '验证期间配置已被修改，请刷新后查看最新状态');
-      return this.finishVerification(record, 'failed', status.state === 'waiting-credentials' ? '缺少 DSH 凭证，请补全后重新验证' : this.safeError(diagnostic(status), record.expected));
+      if (status.state === 'waiting-credentials') return this.finishVerification(record, 'failed', '缺少 DSH 凭证，请补全后重新验证');
+      const reason = this.safeError(diagnostic(status), record.expected);
+      return this.finishVerification(record, 'failed', AUTH_FAILURE.test(reason) ? '需要认证：' + reason : reason);
+    }
+    // 客户端没有 needs-auth 状态：401/403 只出现在 lastError 文本里，而它会让实例一直重连到
+    // 验证预算耗尽。识别到认证失败就立刻结算，不必让用户等 45 秒才知道是凭证问题。
+    if (status?.state === 'reconnecting') {
+      const reason = this.safeError(diagnostic(status), record.expected);
+      if (AUTH_FAILURE.test(reason)) {
+        if (!this.stillExpected(name, record.expected)) return this.finishVerification(record, 'failed', '验证期间配置已被修改，请刷新后查看最新状态');
+        return this.finishVerification(record, 'failed', '需要认证：' + reason);
+      }
     }
     if (status?.state === 'connected') {
       const fresh = record.previousConnectedAt === undefined || status.connectedAt !== record.previousConnectedAt;

@@ -41,6 +41,16 @@ test('persisted but failed connection is not success and is disabled',async()=>{
   assert.equal(service.verifications.get('demo').state,'failed');
   assert.equal(form.value.servers.demo.enabled,false);
 });
+test('an auth failure is reported as needing authentication instead of a timeout',async()=>{
+  // 客户端没有 needs-auth 状态：401 只在 lastError 里，实例会一直重连到验证预算耗尽。
+  const {service}=fixture({status:{state:'reconnecting',attempt:1,maxAttempts:10,nextRetryAtMs:Date.now()+1000,lastError:'Error POSTing to endpoint (HTTP 401): {"error":"invalid token"}'}});
+  const result=await service.mutate(body);assert.equal(result.verifying,true);
+  await settle();
+  const record=service.verifications.get('demo');
+  assert.equal(record.state,'failed');
+  assert.match(record.detail,/^需要认证/);
+  assert.match(record.detail,/401/);
+});
 test('connected without promised registered tools never counts as verified',async()=>{
   const {service}=fixture({schemas:[]});const result=await service.mutate(body);
   assert.equal(result.verifying,true);
@@ -280,6 +290,15 @@ test('bulk restart tolerates individual failures',async()=>{
   service.ctx.mcpManager.restart=async()=>{throw new Error('blocked');};
   const result=await service.mutate({action:'bulk',operation:'restart',names:['a','b'],revision:1});
   assert.equal(result.ok,true);assert.equal(result.affected,0);
+});
+test('single restart is idempotent and needs no matching revision',async()=>{
+  const {service}=fixture({servers:{demo:{...body.entry,enabled:true}}});
+  const restarted=[];
+  service.ctx.mcpManager.restart=async name=>{restarted.push(name);};
+  // 重启不写配置：并发下旧的 revision 不应把一次重启判成保存冲突。
+  assert.deepEqual(await service.mutate({action:'restart',name:'demo',revision:999}),{ok:true});
+  assert.deepEqual(restarted,['demo']);
+  await assert.rejects(()=>service.mutate({action:'restart',name:'ghost',revision:1}),/其他插件管理/);
 });
 
 test('save reports the redacted entry that was written',async()=>{

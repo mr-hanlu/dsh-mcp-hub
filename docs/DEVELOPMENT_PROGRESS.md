@@ -1,6 +1,8 @@
 # 开发进度
 
-更新日期：2026-11-17（Asia/Shanghai）
+更新日期：2026-11-18（Asia/Shanghai）
+
+> 收工状态：单测 101 项、`check`、`build`、`test:e2e`（stdio + HTTP + 凭证）、`test:ui`（页面主流程）全部通过；桌面实例已 link 安装并完成第一轮验收。下一步是接入 CI，见 [后续任务](NEXT_TASKS.md#6-接入-ci)。
 
 ## 当前版本与状态
 
@@ -8,13 +10,66 @@
 - 当前交付为 DSH 插件源码、可构建的浏览器模块、本地预览、测试及安装打包流程。
 - 尚未发布到 npm、插件市场或创建正式发布标签；本次只进行本地 Git 提交，push 由仓库维护者执行。
 - 功能重点为「已添加」「本地导入」和「在线搜索」；在线搜索只接官方 MCP Registry，选择后预填编辑页，不静默安装。
-- 已在临时 DSH profile 验证核心流程，**尚未在用户日常使用的桌面 profile 中完成安装和整页验收**。
+- 尚未在用户日常使用的桌面 profile 中完成安装和整页验收；2026-11-17 换机后本机也未安装（`desktop` profile 的依赖与 bundles 里没有 `dsh-mcp-hub`）。
+
+## 本轮（换机后）修订：安装文档、依赖边界与认证结论
+
+| 项 | 处理 |
+| --- | --- |
+| README 安装步骤在桌面应用上跑不通 | 原文档写 `dsh plugin --profile desktop add`，实际桌面 profile 由 Electron 独占，CLI 直接报 `profile "desktop" is managed exclusively by the Electron application`。改为三条路径：插件页「添加插件」输入本仓库绝对路径（推荐）、自建 CLI profile + `--dump-config`、`npm pack` 后装 tarball |
+| 官方包写进 `dependencies` 且钉死版本 | `@deepseek-ai/dsh-mcp-client@0.2.2-rc.3`、`@deepseek-ai/schemastery` 改为 `peerDependencies`（可选）+ `devDependencies`，只留 `jsonc-parser`、`smol-toml` 在 `dependencies`。否则插件会自带第二份 MCP 客户端，探针行为与宿主分叉，将来加 OAuth 时最先踩到 |
+| 没有 DSH 版本声明 | `package.json` 补 `engines.dsh: ">=0.2.2-0 <0.3.0-0"`，由 DSH 在安装和启动时校验；此前只靠 `@deepseek-ai/dsh` 的 peer 范围兜底 |
+| 文档称"DSH 没有 OAuth 授权 seam" | 按 0.2.2-rc.3 源码核对后修正：`dsh-base` 已挂载 `authorization`/`credentials`，grant 记录支持 `access/refresh/expires`，客户端在 `credentials/reference-updated` 后重建连接。缺口是 MCP 规范发现与 401 重新授权，不是整条路 |
+| 文档写"桌面 IPC Fetch 通道" | 不准确：桌面与 Web 都经同一条本地 HTTP 监听访问 `/api/dsh-mcp-hub/*`，没有单独的 IPC 分发路径 |
+
+验证：改依赖后 `npm test` 99 项通过，`npm run check`、`npm run build` 通过。
+
+## 第一轮桌面验收（2026-11-17）
+
+安装方式：README 方式 A（插件页 → 添加插件 → 仓库绝对路径，link 安装）。版本 DSH 0.2.2-rc.3，macOS（Apple Silicon），profile `desktop`。
+
+| 检查 | 结果 |
+| --- | --- |
+| 插件行挂载 | `include:dsh-mcp-hub` 状态 `schema`，`packageDir` 指向仓库链接 |
+| 客户端页面 | `settings.section` 中 `dsh-mcp-hub` 已注册且 active（order 36） |
+| 列表读取 | 200，空列表，`revision 0`，`profile desktop`，`referenceStorage template` |
+| 测试连接 | 200 `ok`，10 项检查全过，含「测试连接已关闭」 |
+| 添加 + 后台验证 | 保存返回 `verifying`，493 ms 后结算为「DSH 已连接，已注册 1 个工具」 |
+| 工具读取 | `tools` 返回 1 个（`echo`） |
+| 停用 | 行状态变 `disabled`，工具数 0 |
+| 启用 | 回到 `connected` |
+| 重启 | 首次以 409 被拒，见下方缺陷 |
+| 删除 | 200，列表回到 0 条，无残留「清理中」行 |
+
+发现的缺陷 1（已修）：**重启被 revision 校验挡住**。`restart` 不写配置、是幂等动作，但仍复用保存路径的 revision 校验，所以在「启用 → 重启」这种连续操作里会返回 `REVISION_CONFLICT`。现在 `restart` 在 revision 校验之前处理，只要求条目存在；新增单测「single restart is idempotent and needs no matching revision」，`npm test` 变为 100 项。
+
+发现的缺陷 2（已修）：**401 只会等到超时**。写 HTTP 端到端时发现，token 错误的服务在验证里显示「等待正式连接或工具注册超时」，实际原因是 401 —— 因为客户端没有 needs-auth 状态，401 只出现在 `lastError` 里，而实例会一直重连到验证预算（45 秒）耗尽。现在 `service.js` 用 `AUTH_FAILURE` 文本口径（401/403/unauthorized/invalid_token/authenticat）在 `failed` 与 `reconnecting` 两种状态下提前结算为「需要认证：…」，实测 2 ms 出结论；识别不到时保留原文，不猜原因。
+
+顺手补的自动化（2026-11-18 补齐页面层与 HTTP/凭证）：
+
+- `npm run test:e2e`（`tests/e2e/web-profile.e2e.mjs`）：临时 `DSH_HOME` 里从 `web` 模板建 profile、link 本插件、启动真实 Host，用真实路由跑「列表 → 扫描 → 测试 → 添加 → 验证 → 工具 → 停用 → 启用 → 重启 → 删除」。
+- `npm run test:ui`（`tests/e2e/ui-page.e2e.mjs`）：同一套临时 profile 上跑无头 Chrome，真的点一遍页面 —— 设置 → MCP Hub、空状态、`本地导入` 页签、JSON 粘贴逐行测试、一次添加两个、行内「已连接」、删除确认弹窗、删完回空状态，以及 JSON / 表单页签切换后草稿仍在。
+
+`test:e2e` 之后又补了 Streamable HTTP 与凭证（2026-11-18，`tests/manual/echo-http-server.mjs` 作为受控服务）：
+
+| 场景 | 结果 |
+| --- | --- |
+| 静态 Bearer 头 | 测试 → 保存 → 验证「已连接，已注册 1 个工具」 |
+| `${credential:E2E_MCP_TOKEN}` | 测试通过；配置里保留模板，不写明文 |
+| 凭证轮换 | 改 `$DSH_HOME/.credentials.yaml` 后 309 ms 内重连（`connectedAt` 变化） |
+| 错误 token | 判定为「需要认证：… (HTTP 401)」，**2 ms** 结算 |
+
+轮换能立即生效，靠的是 MCP 客户端的 `credentials/reference-updated` 重连；这条以前只是文档推断，现在有测试守着。
+
+两条都跑通，均不碰用户 profile。共用 `tests/e2e/lib/profile.mjs`（找 dsh、建临时 profile、启动、取会话 cookie）。
+
+尚未覆盖（仍需人工）：主题与深浅色、窄窗口布局、重启 DSH 后的来源记录恢复、真实 DSH 凭证引用（存在 / 缺失 / 更新后重连 / 凭证服务不可用）、与官方 Manager 已有服务 / 插件注册服务 / 继承配置的边界、真实远程 HTTP 服务与 Bearer token 链路。
 
 ## 已实现功能
 
 | 模块 | 当前实现 |
 | --- | --- |
-| DSH 接入 | 在设置中注册 MCP Hub；通过官方 Connection Fetch 通道访问 Host，适配浏览器 HTTP 和桌面 IPC 的接口机制 |
+| DSH 接入 | 在设置中注册 MCP Hub；用官方 `connection.fetch.register` 注册 `/api/dsh-mcp-hub/*` 精确路由；桌面与 Web 都经同一条本地 HTTP 监听访问，没有单独的 IPC 通道 |
 | 服务管理 | 列表、状态筛选、搜索、添加、编辑、启停、重启、模态确认删除；行内只保留编辑/重启/删除/启停 |
 | 服务详情 | 工具名称、描述、参数 Schema、配置和连接诊断；诊断含重试次数、下次重试、连接清理、官方停止原因与「现在复诊」 |
 | 本机导入 | 连接 Host 后自动扫描 Claude Code / Claude Desktop、Codex、Gemini CLI、VS Code / Copilot、Copilot CLI、Windsurf、Cursor、OpenCode 的已知配置位置，覆盖桌面端、CLI/Server 和三大平台 |
@@ -54,7 +109,7 @@
 | 界面语言 | 跟随 DSH 的 `locale` 服务：`zh` 显示中文，其他语言回退英文；翻译只作用于已知界面文案，服务名和工具名保持原样 |
 | 撤销本批 | 添加成功后保留 20 秒撤销入口；只删除该批仍未被修改的服务，改名/改配置的条目会跳过 |
 
-验证：`npm test` 99 项通过；`npm run check`、`npm run build` 通过。尚未完成真实桌面 profile 的整页验收。
+验证：`npm test` 通过；`npm run check`、`npm run build` 通过。桌面验收结果见「第一轮桌面验收」。
 
 ## 本轮（第二轮复审后）修复
 
@@ -107,10 +162,13 @@
 
 | 验证方式 | 结果与覆盖范围 |
 | --- | --- |
-| `npm test` | 99 项通过：格式解析、高德配置回归、env 缺失与凭据判定、脱敏、重复判断、版本冲突、旧连接误判、工具注册等待、真实非 MCP 程序拒绝、引用改写为凭证模板、硬约束与错误 code、项目级导入、坏条目容错、验证结果持久化、推送通道、复诊、备份占位符等 |
+| `npm test` | 100 项通过：格式解析、高德配置回归、env 缺失与凭据判定、脱敏、重复判断、版本冲突、旧连接误判、工具注册等待、真实非 MCP 程序拒绝、引用改写为凭证模板、硬约束与错误 code、项目级导入、坏条目容错、验证结果持久化、推送通道、复诊、备份占位符等 |
 | `npm run check` | Host JavaScript 语法检查通过 |
 | `npm run build` | 插件浏览器模块及独立预览构建通过 |
+| `npm run test:e2e` | 通过：临时 `DSH_HOME` + `web` 模板 profile，真实 `/api/dsh-mcp-hub/*` 路由跑完 stdio 全链路（列表、扫描、测试、添加、验证、工具、启停、重启、删除）与 Streamable HTTP 全链路（静态 Bearer、凭证模板、凭证轮换重连、错误 token 判为需要认证）；不写用户 profile |
+| `npm run test:ui` | 通过：无头 Chrome 在临时 profile 上点完设置页 —— 导航到 MCP Hub、空状态、导入页签、JSON 粘贴逐行测试、一次添加两个并显示已连接、删除弹窗与删后空状态、页签切换草稿保留 |
 | `npm run test:integration` | 1 项真实集成测试通过：官方 DSH 0.2.2-rc.3 临时 profile 中，测试不持久化、保存持久化、连接、工具注册、显式读取、重复判断、停用、停用编辑和删除 |
+| 桌面实机验收 | 见「第一轮桌面验收」：安装、挂载、列表、测试、添加与验证、工具、启停、删除均通过；重启缺陷已修 |
 | 浏览器验收 | 预览中验证 JSON 自动识别、env 引用显示与缺失提示、删除弹窗、删除后重新导入、保存关闭、Toast 消失和深浅色布局 |
 | 预览 HTTP 接口 | 真实调用接口，确认可执行文件存在但不实现 MCP 时返回失败 |
 | 安装包 | 已检查浏览器模块能加载，Host 与共享模块进入 tarball；构建产物和 tarball 不进入 Git |
@@ -123,7 +181,7 @@
 - 预览的手动文件导入会解析实际选择的文件。
 - 预览的连接测试以及添加启用服务前的验证会实际启动 / 连接 MCP，结束后关闭；不写入现有 DSH。
 - 真实插件读取 Host 上的配置，通过官方 Settings 和 Manager 保存、连接、注册工具。
-- 预览无法代替实际 DSH 凭证服务验证，也不能替代桌面 IPC 和设置页的安装验收。
+- 预览无法代替实际 DSH 凭证服务验证，也不能替代设置页的安装验收。官方文档不建议用自建预览页替代"装进真实 profile 再看"的验证顺序。
 
 ## 源码入口
 
@@ -151,6 +209,8 @@ npm run build
 npm run dev
 ```
 
-真实集成测试的临时依赖准备方式见 [README](../README.md#开发与测试)，通过 `DSH_TEST_MODULES` 指向该依赖目录。不要依赖开发机已有的 `/tmp` 目录；新机器应重新准备依赖。
+装进 DSH 的步骤（桌面应用走插件页、CLI profile 走 `dsh plugin`、tarball 安装）见 [README 安装](../README.md#安装)；验证顺序见 [README 验证方式](../README.md#验证方式)。
+
+真实集成测试的临时依赖准备方式见 [README 验证方式](../README.md#验证方式) 第 2 条，通过 `DSH_TEST_MODULES` 指向该依赖目录。不要依赖开发机已有的 `/tmp` 目录；新机器应重新准备依赖。
 
 后续按 [后续任务](NEXT_TASKS.md) 的 P0 项开始，先补齐真实桌面安装验收，再扩展功能。
