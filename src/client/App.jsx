@@ -664,7 +664,7 @@ function Editor({ draft, request, revision, reloadRevision, onClose, onSaved, ex
       <div className="hub-actions">
         {mode === 'json' ? <>
           {!original && testingAll && <button className="hub-button" onClick={cancelTests}>取消测试</button>}
-          {!original && !testingAll && <button className="hub-button" disabled={busy || !jsonAddRows.filter(canTest).length} onClick={testAll}>{testingAll ? `测试中 ${progress.done}/${progress.total}` : '测试全部'}</button>}
+          {!original && <button className="hub-button" disabled={busy || testingAll || !jsonAddRows.filter(canTest).length} onClick={testAll}>{testingAll ? `测试中 ${progress.done}/${progress.total}` : '测试全部'}</button>}
           {original && <button className="hub-button" disabled={busy || !jsonEditRow || !canTest(jsonEditRow)} onClick={() => jsonEditRow && testRow(jsonEditRow)}>{testingRow ? '测试中…' : '测试连接'}</button>}
           <button className="hub-button primary" disabled={busy || testingAll || !(original ? jsonEditReady : jsonReady)} onClick={submitJson}>{busy && busyAction === 'import' ? '添加中…' : busy && busyAction === 'save' ? '保存中…' : original ? '保存' : jsonSkipped.length && !jsonAddRows.length ? '没有可添加' : `添加${jsonAddRows.length ? ` ${jsonAddRows.length} 个` : ''}`}</button>
         </> : <>

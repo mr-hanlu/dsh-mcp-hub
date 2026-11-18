@@ -107,7 +107,7 @@ npm pack     # prepack 会自动 build
    - **Streamable HTTP**：静态 Bearer 头、`${credential:…}` 模板（配置里保留模板，不落明文）、凭证轮换后客户端自行重连、错误 token 被判定为「需要认证」并立即结算。
 
    结束删除临时目录并退出。
-3. **端到端 · 页面层**：`npm run test:ui` 在同一套临时 profile 上启动无头 Chrome，真的点一遍：设置 → MCP Hub、空状态、`本地导入` 页签、JSON 粘贴 → 逐行测试 → 一次添加两个、行内「已连接」、删除确认弹窗、删完回到空状态，并验证 JSON / 表单两个页签切换后草稿还在。依赖 `puppeteer-core`（devDependency）与本机 Chrome，可用 `CHROME_PATH` 指定；端口与 profile 都在临时目录里。
+3. **端到端 · 页面层**：`npm run test:ui` 在同一套临时 profile 上启动无头 Chrome，真的点一遍：设置 → MCP Hub、空状态、`本地导入` 页签、JSON 粘贴 → 逐行测试 → 一次添加两个、行内「已连接」、重名跳过只添加新服务、测试进行中显示进度并可取消、删除确认弹窗、删完回到空状态，并验证 JSON / 表单两个页签切换后草稿还在；失败时把全页截图写到 `tests/e2e/artifacts/`。依赖 `puppeteer-core`（devDependency）与本机 Chrome，可用 `CHROME_PATH` 指定；端口与 profile 都在临时目录里。
    两条端到端默认可跳过：找不到 `dsh` / Chrome 时打印 SKIP 并以 0 退出，用 `DSH_BIN` 指定其他 launcher、`CHROME_PATH` 指定 Chrome。设 `DSH_E2E_REQUIRED=1` 后 SKIP 变成失败，CI 用这个开关避免「环境没装 DSH」被当成通过。两条都默认占用 `127.0.0.1:3080`，同一台机器上要串行跑。
 4. **真实集成测试**：在临时 profile 里启动受控 MCP 子进程，走一遍写入、连接、工具注册、停用、删除。依赖装在独立目录，不随插件发布：
 

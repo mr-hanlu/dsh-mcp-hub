@@ -7,6 +7,9 @@
  *   - 表格行是否显示连接状态与工具数
  *   - 删除确认弹窗 → 删除 → 回到空状态
  *   - JSON / 表单两个页签切换后草稿是否还在
+ *   - 连接测试进行中显示进度并可取消
+ *   - 已存在的同名服务在粘贴后标为跳过，只测试、只添加新服务
+ * 失败时会往 tests/e2e/artifacts/ 留一张全页截图。
  *
  * 用法：npm run test:ui
  * 依赖本机 Chrome（用 CHROME_PATH 覆盖）与 puppeteer-core（devDependency）。
@@ -15,6 +18,7 @@
  */
 import { dirname } from 'node:path';
 import { existsSync } from 'node:fs';
+import { mkdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { bootProfile, createProfile, findDsh, skip, sleep } from './support/profile.mjs';
@@ -23,6 +27,7 @@ const repoRoot = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 const fixture = repoRoot + '/tests/manual/echo-server.mjs';
 const CHROME = process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const report = [];
+let failurePage;
 const step = (name, value) => report.push({ name, ...value });
 
 /** 按可访问名称点击：精确文本或正则，只看 button / role=button / tab / menuitem / a。 */
@@ -100,6 +105,7 @@ async function main() {
       args: ['--no-first-run', '--no-default-browser-check', '--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
     });
     const page = await browser.newPage();
+    failurePage = page;
     await page.setViewport({ width: 1280, height: 900 });
     await page.goto(session.url, { waitUntil: 'networkidle2', timeout: 60000 });
     await sleep(1500);
@@ -127,6 +133,14 @@ async function main() {
     assert.match(kept, /draft-keep/, '切换页签后 JSON 草稿丢失');
     step('draft-kept', { ok: true });
 
+    // 连接测试取消：让一个服务一直不停握手，点「取消测试」应立即结束等待。
+    await pasteJson(page, JSON.stringify({ mcpServers: { uislow: { command: process.execPath, args: [fixture], cwd: repoRoot, env: { MCP_ECHO_DELAY: '3000' } } } }, null, 2));
+    assert.equal(await clickLabel(page, '测试全部'), true, '找不到「测试全部」');
+    await waitForText(page, /测试中 \d+\/\d+/, { label: '测试进行中' });
+    assert.equal(await clickLabel(page, '取消测试'), true, '找不到「取消测试」');
+    await waitForText(page, '已取消测试', { label: '取消测试提示' });
+    step('test-cancel', { ok: true });
+
     const entry = command => ({ command, args: [fixture], cwd: repoRoot });
     const document = { mcpServers: { uitest1: entry(process.execPath), uitest2: entry(process.execPath) } };
     await pasteJson(page, JSON.stringify(document, null, 2));
@@ -143,13 +157,30 @@ async function main() {
     await waitForText(page, /uitest2.*已连接/, { label: '第二行状态', timeoutMs: 60000 });
     step('add-two', { ok: true, connected: 2 });
 
+    // 重名跳过：已有 uitest1 时再粘贴它和新服务，只测试/添加新服务。
+    assert.equal(await clickLabel(page, '添加 MCP'), true, '添加完成后找不到「添加 MCP」');
+    await waitForText(page, 'JSON 编辑', { label: '再次打开编辑器' });
+    await pasteJson(page, JSON.stringify({ mcpServers: { uitest1: entry(process.execPath), uitest3: entry(process.execPath) } }, null, 2));
+    await waitForText(page, '已存在跳过 1', { label: '重名跳过提示' });
+    assert.equal(await clickLabel(page, '测试全部'), true, '找不到「测试全部」');
+    await waitForText(page, /已测试 1\/1/, { label: '只测试新服务' });
+    if (!(await clickLabel(page, /^添加 1 个$/))) throw new Error('找不到「添加 1 个」按钮');
+    await waitForText(page, '已添加 1 个服务', { label: '只添加新服务' });
+    await waitForText(page, /uitest3.*已连接/, { label: '新服务连接', timeoutMs: 60000 });
+    step('duplicate-skip', { ok: true, added: 1, skipped: 1 });
+
     assert.equal(await clickLabel(page, '删除 uitest1'), true);
     await waitForText(page, '删除 MCP 服务', { label: '删除弹窗' });
     assert.equal(await clickLabel(page, '删除'), true);
-    await waitForText(page, '已添加 1', { label: '删除第一行' });
+    await waitForText(page, '已添加 2', { label: '删除第一行' });
     step('delete-one', { ok: true });
 
     assert.equal(await clickLabel(page, '删除 uitest2'), true);
+    await waitForText(page, '删除 MCP 服务', { label: '删除弹窗' });
+    assert.equal(await clickLabel(page, '删除'), true);
+    await waitForText(page, '已添加 1', { label: '删除第二行' });
+
+    assert.equal(await clickLabel(page, '删除 uitest3'), true);
     await waitForText(page, '删除 MCP 服务', { label: '删除弹窗' });
     assert.equal(await clickLabel(page, '删除'), true);
     await waitForText(page, '连接你的第一个 MCP', { label: '删除后空状态', timeoutMs: 30000 });
@@ -162,7 +193,17 @@ async function main() {
   console.log(JSON.stringify({ ok: true, steps: report }, null, 2));
 }
 
-main().catch(error => {
-  console.error(JSON.stringify({ ok: false, steps: report, error: String(error?.message ?? error) }, null, 2));
+main().catch(async error => {
+  // 失败时留一张全页截图，CI 的 artifact 能直接看到当时的界面。
+  let screenshot = '';
+  if (failurePage) {
+    try {
+      const dir = repoRoot + '/tests/e2e/artifacts';
+      await mkdir(dir, { recursive: true });
+      screenshot = dir + '/ui-failure-' + Date.now() + '.png';
+      await failurePage.screenshot({ path: screenshot, fullPage: true });
+    } catch {}
+  }
+  console.error(JSON.stringify({ ok: false, steps: report, error: String(error?.message ?? error), screenshot }, null, 2));
   process.exitCode = 1;
 });

@@ -51,8 +51,8 @@
 ### 5. 自动化端到端与可重复验证
 
 - [x] 把 Host 侧验收转成可重复运行的端到端用例：`npm run test:e2e`（临时 `DSH_HOME` + `web` 模板 profile + 真实路由，约 1 分钟，不碰用户 profile）。
-- [x] 把页面主流程纳入自动化：`npm run test:ui`（无头 Chrome）覆盖设置页导航、空状态、导入页签、JSON 粘贴逐行测试、多服务一次添加、行内连接状态、删除弹窗、页签切换草稿保留。
-- [ ] 页面流程补剩余分支：重名改名/跳过、env 补全、隐藏值改名、保存后关闭、失败保留、测试取消与超时。
+- [x] 把页面主流程纳入自动化：`npm run test:ui`（无头 Chrome）覆盖设置页导航、空状态、导入页签、JSON 粘贴逐行测试、多服务一次添加、行内连接状态、删除弹窗、页签切换草稿保留、测试进度与取消、重名跳过。
+- [ ] 页面流程补剩余分支：env 补全、隐藏值改名、保存后关闭、失败保留、超时提示；重名跳过与测试进度/取消已覆盖。
 - [ ] 覆盖删除后重新导入、外部配置变更、连续操作以及测试期间关闭 / 卸载。
 - [x] 使用受控本地 MCP 与临时目录（`tests/manual/echo-server.mjs`、临时 `DSH_HOME`），不依赖 npx 在线下载或真实账户。
 - [x] 接入 CI（见 P0-6）。
@@ -61,11 +61,11 @@
 
 ### 6. 接入 CI
 
-`.github/workflows/ci.yml` 已接入；本地基线先跑通（单测 101 项、`check`、`build`、两条端到端、打包清单 21 个文件全部通过）。
+`.github/workflows/ci.yml` 已接入；本地基线先跑通（单测 106 项、`check`、`build`、两条端到端、打包清单 21 个文件全部通过）。
 
 - [x] 基础流水线：`npm ci` → `npm test` → `npm run check` → `npm run build` → `npm pack --dry-run --json --ignore-scripts` 交给 `scripts/assert-pack.mjs` 断言包内容（`lib/client.js`、`lib/style.css`、`cordis.patch.yml`、`locale/`、`icon.svg`、`src/host`、`src/shared`、`README.md`、`LICENSE`），并断言复审报告不进包。这一层不需要 DSH，公开 runner 即可。
 - [x] 端到端流水线（需要装了 DSH 的机器）：`npm run test:e2e` 与 `npm run test:ui` 串行跑在一个带 `dsh` 标签的自托管 runner 上，由仓库变量 `DSH_E2E_RUNNER=true` 打开（未打开时整个 job 跳过，不会挂起）。CI 里设 `DSH_E2E_REQUIRED=1`，把「找不到 dsh / Chrome」从 SKIP 变成失败——否则 runner 没装 DSH 时会绿灯通过但什么都没测。
-- [ ] 判定与产物：脚本的 JSON 报告已经完整打在作业日志里；`test:ui` 失败时的截图钩子仍未实现（需要给脚本加 `--screenshot` 之类的最小开关）。
+- [x] 判定与产物：脚本的 JSON 报告完整打在作业日志里；`test:ui` 失败时自动把全页截图写到 `tests/e2e/artifacts/ui-failure-*.png`，报告里带 `screenshot` 路径。
 - [x] 缓存：基础作业用 `setup-node` 的 npm 缓存；自托管 runner 不缓存 `node_modules`，每次 `npm ci` 保证干净。`puppeteer-core` 不下载浏览器，Chrome 由 runner 提供（`DSH_E2E_CHROME_PATH`）。
 
 验收标准：一次干净 clone 后推送即可看到绿灯；失败时能直接定位到步骤；端到端在无人值守下可重复（不依赖开发机现存的 `/tmp`、profile 或 Chrome 用户目录）。

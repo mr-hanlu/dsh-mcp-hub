@@ -6,6 +6,8 @@ import { createInterface } from 'node:readline';
  * 它不读写任何外部资源，也不会被真实使用，验收脚本结束时会删除对应条目。
  */
 const input = createInterface({ input: process.stdin });
+// 验收晚页面上的「取消测试」时可以显式放慢握手（毫秒）。
+const DELAY = Number(process.env.MCP_ECHO_DELAY ?? 0);
 
 input.on('line', line => {
   if (!line.trim()) return;
@@ -30,5 +32,7 @@ input.on('line', line => {
   } else {
     result = {};
   }
-  process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result }) + '\n');
+  const payload = JSON.stringify({ jsonrpc: '2.0', id: request.id, result }) + '\n';
+  if (DELAY) setTimeout(() => process.stdout.write(payload), DELAY);
+  else process.stdout.write(payload);
 });
