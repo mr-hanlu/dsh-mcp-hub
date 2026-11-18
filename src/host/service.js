@@ -523,8 +523,16 @@ export class HubService {
       }
       if (body.action === 'toggle') {
         if (typeof body.enabled !== 'boolean') fail('REQUEST_INVALID', '缺少启停状态');
+        const previousConnectedAt = this.ctx.mcpManager.list().find(row => row.name === body.name)?.status?.connectedAt;
         await this.write(form, [{ op: 'set', path: ['servers', body.name, 'enabled'], value: body.enabled }], entries[body.name]);
-        return { ok: true };
+        if (!body.enabled) {
+          this.cancelVerification(body.name, '服务已停用，验证结束');
+          return { ok: true };
+        }
+        // 启停只写 enabled，本身不重启实例；验证要跟着新的连接代次重开，界面才不会
+        // 继续显示上一次保存或上一次失败时的结论。
+        this.startVerification(body.name, { ...entries[body.name], enabled: true }, previousConnectedAt);
+        return { ok: true, verifying: true };
       }
       if (body.action === 'restart') {
         await this.ctx.mcpManager.restart(body.name);
@@ -643,13 +651,19 @@ export class HubService {
     }
     if (body.operation === 'enable' || body.operation === 'disable') {
       const enable = body.operation === 'enable';
-      const ops = requested
+      const targets = requested
         .filter(name => Object.hasOwn(entries, name))
-        .filter(name => (entries[name].enabled !== false) !== enable)
-        .map(name => ({ op: 'set', path: ['servers', name, 'enabled'], value: enable }));
-      if (!ops.length) return { ok: true, affected: 0 };
+        .filter(name => (entries[name].enabled !== false) !== enable);
+      if (!targets.length) return { ok: true, affected: 0 };
+      const previousConnectedAt = new Map(this.ctx.mcpManager.list().map(row => [row.name, row.status?.connectedAt]));
+      const ops = targets.map(name => ({ op: 'set', path: ['servers', name, 'enabled'], value: enable }));
       await this.write(form, ops, undefined);
-      return { ok: true, affected: ops.length };
+      for (const name of targets) {
+        if (!enable) { this.cancelVerification(name, '服务已停用，验证结束'); continue; }
+        // 手动启用等于新的连接代次，必须重新验证；否则诊断页还挂着停用前的旧结论。
+        this.startVerification(name, { ...entries[name], enabled: true }, previousConnectedAt.get(name));
+      }
+      return { ok: true, affected: ops.length, verifying: enable };
     }
     fail('UNSUPPORTED_ACTION', '不支持的批量操作');
   }
@@ -658,7 +672,7 @@ export class HubService {
    * verification 字段回报，并订阅 mcp-manager/status 以便第一时间结算。
    */
   startVerification(name, expected, previousConnectedAt, snapshot) {
-    this.cancelVerification(name, '已被新的保存请求取代');
+    this.cancelVerification(name, '已被新的操作取代');
     // 条目显式声明了更长的启动预算时跟着放宽，避免比官方客户端的超时更早判失败。
     const declared = expected.startupTimeoutMs;
     const budget = Math.max(this.waitMs, declared ? declared + 20000 : 0);
@@ -718,7 +732,13 @@ export class HubService {
     const live = runtime.find(row => row.name === name);
     if (!live || live.configured === false) return this.finishVerification(record, 'failed', '验证期间条目已被移除，请刷新后查看最新状态');
     const status = live.status;
-    if (status?.state === 'disabled') return this.finishVerification(record, 'cancelled', '服务已停用，验证结束');
+    if (status?.state === 'disabled') {
+      // 刚把 enabled 写回 true 时，官方实例可能还没重启，仍短暂停在 disabled。
+      // 只有配置真的还是停用才取消，否则这次验证会被自己的写操作误杀。
+      const current = this.descriptor({ fresh: true }).value?.servers?.[name];
+      if (current && current.enabled !== false) { record.detail = '正在等待服务启动…'; return; }
+      return this.finishVerification(record, 'cancelled', '服务已停用，验证结束');
+    }
     if (status?.state === 'failed' || status?.state === 'waiting-credentials') {
       if (!this.stillExpected(name, record.expected)) return this.finishVerification(record, 'failed', '验证期间配置已被修改，请刷新后查看最新状态');
       if (status.state === 'waiting-credentials') return this.finishVerification(record, 'failed', '缺少 DSH 凭证，请补全后重新验证');

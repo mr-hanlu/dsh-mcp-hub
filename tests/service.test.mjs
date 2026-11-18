@@ -66,6 +66,46 @@ test('a running verification can be cancelled without disabling the server',asyn
   assert.equal(service.verifications.get('demo').state,'cancelled');
   assert.equal(form.value.servers.demo.enabled,true);
 });
+test('manually enabling a service starts a fresh verification',async()=>{
+  // 启停只写 enabled；如果不起新验证，诊断页会一直显示停用前的旧结论。
+  const {service}=fixture({servers:{demo:{...body.entry,enabled:false}},status:{state:'connected',toolCount:1}});
+  const result=await service.mutate({action:'toggle',name:'demo',enabled:true,revision:1});
+  assert.equal(result.verifying,true);
+  assert.equal(service.verifications.get('demo').state,'ok');
+  assert.equal((await service.list()).servers[0].verification.state,'ok');
+});
+test('enabling after a failed verdict replaces the stale conclusion',async()=>{
+  const {service,form}=fixture({servers:{demo:{...body.entry,enabled:false}},status:{state:'connected',toolCount:1}});
+  service.lastVerifications.demo={state:'failed',detail:'上次连接被拒绝',startedAt:1,finishedAt:2};
+  await service.mutate({action:'toggle',name:'demo',enabled:true,revision:1});
+  const row=(await service.list()).servers[0];
+  assert.equal(row.verification.state,'ok');
+  assert.match(row.verification.detail,/已注册 1 个工具/);
+  assert.equal(form.value.servers.demo.enabled,true);
+});
+test('disabling a service ends the verification that was still running',async()=>{
+  const {service}=fixture({servers:{demo:{...body.entry,enabled:true}},status:{state:'connecting'}});
+  service.startVerification('demo',{...body.entry,enabled:true});
+  assert.equal(service.verifications.get('demo').state,'verifying');
+  await service.mutate({action:'toggle',name:'demo',enabled:false,revision:1});
+  assert.equal(service.verifications.get('demo').state,'cancelled');
+});
+test('a transient disabled status does not cancel an enable verification',async()=>{
+  // 写回 enabled=true 之后、官方实例真正启动之前，状态可能还停在 disabled。
+  const {service}=fixture({servers:{demo:{...body.entry,enabled:false}},status:{state:'disabled'},waitMs:600});
+  const result=await service.mutate({action:'toggle',name:'demo',enabled:true,revision:1});
+  assert.equal(result.verifying,true);
+  await settle(30);
+  const record=service.verifications.get('demo');
+  assert.equal(record.state,'verifying');
+  assert.match(record.detail,/等待服务启动/);
+});
+test('bulk enable verifies the rows it turns back on',async()=>{
+  const {service}=fixture({servers:{demo:{...body.entry,enabled:false}},status:{state:'connected',toolCount:1}});
+  const result=await service.mutate({action:'bulk',operation:'enable',names:['demo'],revision:1});
+  assert.equal(result.verifying,true);
+  assert.equal(service.verifications.get('demo').state,'ok');
+});
 test('retained cleanup rows are reported as cleanup rather than plugin servers',async()=>{
   const {service}=fixture({extraRows:[{name:'gone',configured:false,status:{state:'failed',reason:'cleanup',result:{closeConfirmed:false,cleanupError:'busy'}}}]});
   const [row]=(await service.list()).servers;

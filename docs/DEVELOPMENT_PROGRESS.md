@@ -2,7 +2,7 @@
 
 更新日期：2026-11-18（Asia/Shanghai）
 
-> 收工状态：单测 101 项、`check`、`build`、`test:e2e`（stdio + HTTP + 凭证）、`test:ui`（页面主流程）全部通过；桌面实例已 link 安装并完成第一轮验收。下一步是接入 CI，见 [后续任务](NEXT_TASKS.md#6-接入-ci)。
+> 收工状态：单测 106 项、`check`、`build`、`test:e2e`（stdio + HTTP + 凭证）、`test:ui`（页面主流程）全部通过；桌面实例已 link 安装并完成第一轮验收。CI 基础流水线与端到端作业已接入；启停后的验证结论已能刷新。下一步是补桌面人工项，见 [后续任务](NEXT_TASKS.md#下一次开发的建议顺序)。
 
 ## 当前版本与状态
 
@@ -10,7 +10,7 @@
 - 当前交付为 DSH 插件源码、可构建的浏览器模块、本地预览、测试及安装打包流程。
 - 尚未发布到 npm、插件市场或创建正式发布标签；本次只进行本地 Git 提交，push 由仓库维护者执行。
 - 功能重点为「已添加」「本地导入」和「在线搜索」；在线搜索只接官方 MCP Registry，选择后预填编辑页，不静默安装。
-- 尚未在用户日常使用的桌面 profile 中完成安装和整页验收；2026-11-17 换机后本机也未安装（`desktop` profile 的依赖与 bundles 里没有 `dsh-mcp-hub`）。
+- 桌面 `desktop` profile 已用 link 方式安装：`~/.dsh/profiles/desktop/package.json` 里 `dsh-mcp-hub` 指向本仓库，bundles 也含它；第一轮验收见下文。尚未系统验收的是主题与窄窗口、重启 DSH 后的恢复、凭证缺失与凭证服务不可用这些人工项。
 
 ## 本轮（换机后）修订：安装文档、依赖边界与认证结论
 
@@ -23,6 +23,35 @@
 | 文档写"桌面 IPC Fetch 通道" | 不准确：桌面与 Web 都经同一条本地 HTTP 监听访问 `/api/dsh-mcp-hub/*`，没有单独的 IPC 分发路径 |
 
 验证：改依赖后 `npm test` 99 项通过，`npm run check`、`npm run build` 通过。
+
+## 本轮（2026-11-18）：修复两层端到端红灯、接入 CI
+
+复现基线时 `npm test`（101 项）、`npm run check`、`npm run build` 都绿，但两条端到端都不健康，CI 也是空白。
+
+| 现象 | 原因 | 处理 |
+| --- | --- | --- |
+| `test:e2e` 报「删除后仍在列表里 1 !== 0」 | 重启后立即删除，`/mutate` 返回 200，但官方 Manager 会先留一行 `managed: 'cleanup'`（状态 `connecting`）约 200ms 再移除；测试拿到 200 就立刻断言列表长度 | `removeRow` 在删除成功后轮询 `/servers`，最多 15s 等该行真正消失，超时才失败。产品行为本身是对的，不用改 Host |
+| `test:ui` 起不来：`Cannot find package 'puppeteer-core'` | lockfile 里有 devDependency，当前 `node_modules` 没装（开发机 npm 全局缓存有 root-owned 文件，`npm ci` 直接报错） | 用独立缓存重装：`npm ci --cache /tmp/npm-cache-mcphub`；之后两条端到端都跑通 |
+| CI 里「runner 没装 DSH」会假绿 | 两条端到端找不到 `dsh` / Chrome 时打印 SKIP 并以 0 退出 | `tests/e2e/support/profile.mjs` 新增 `skip(reason)`：`DSH_E2E_REQUIRED=1` 时改成失败，CI 用它把 SKIP 变成红 |
+| 打包内容没有自动断言 | 只有人工检查过 tarball | 新增 `scripts/assert-pack.mjs`，用 `npm pack --dry-run --json --ignore-scripts` 的清单断言必需文件齐全、复审报告不进包（当前 21 个文件） |
+
+CI：`.github/workflows/ci.yml` 分两个作业。`checks` 在 `ubuntu-latest` 上跑 `npm ci` → `npm test` → `npm run check` → `npm run build` → 打包清单校验并上传清单；`e2e` 走带 `dsh` 标签的自托管 runner，由仓库变量 `DSH_E2E_RUNNER=true` 打开，未打开时整个作业跳过，两条端到端串行（都默认占 `127.0.0.1:3080`，并行会 EADDRINUSE）。
+
+验证：`npm test` 101 项、`npm run check`、`npm run build`、`npm run test:e2e`（含凭证轮换 308ms、401 19ms 结算）、`npm run test:ui`、`node scripts/assert-pack.mjs` 全部通过。
+
+## 本轮（2026-11-18）：启停后重新验证
+
+2026-11-17 验收时发现：手动「启用」只写 `enabled`，不启动新的验证，诊断页的「最近一次验证」还挂着停用前（或上一次保存时）的旧结论；`verificationView()` 优先读内存记录、其次读持久化记录，所以界面状态与事实不符。
+
+| 位置 | 处理 |
+| --- | --- |
+| `src/host/service.js` 的 `toggle` 分支 | 停用：写完后结束仍在跑的验证（`cancelVerification`）；启用：写入后以新的连接代次重开验证（`startVerification`），返回值带 `verifying: true` |
+| `bulk` 的 `enable` / `disable` 分支 | 同一条 revision 写完后再逐个处理：停用取消验证，启用逐个重开验证；批量启用返回 `verifying: true` |
+| `evaluateVerification` 的 `disabled` 分支 | 刚写回 `enabled: true` 时官方实例可能仍短暂停在 `disabled`。现在只有配置确实还是停用才判「已取消」，否则保持等待并显示「正在等待服务启动…」，避免验证被自己的写操作误杀 |
+| `startVerification` 的取消文案 | 「已被新的保存请求取代」改为「已被新的操作取代」，因为现在也会被启停操作取代 |
+| `tests/service.test.mjs` | 新增 5 项：手动启用会重新验证、启用后旧失败结论被替换、停用会结束进行中的验证、瞬时 `disabled` 不误判取消、批量启用会验证被重新打开的条目（单测 101 → 106） |
+
+验证：`npm test` 106 项、`npm run check`、`npm run build`、`npm run test:e2e`、`npm run test:ui` 全部通过。
 
 ## 第一轮桌面验收（2026-11-17）
 
@@ -162,16 +191,18 @@
 
 | 验证方式 | 结果与覆盖范围 |
 | --- | --- |
-| `npm test` | 100 项通过：格式解析、高德配置回归、env 缺失与凭据判定、脱敏、重复判断、版本冲突、旧连接误判、工具注册等待、真实非 MCP 程序拒绝、引用改写为凭证模板、硬约束与错误 code、项目级导入、坏条目容错、验证结果持久化、推送通道、复诊、备份占位符等 |
+| `npm test` | 106 项通过：格式解析、高德配置回归、env 缺失与凭据判定、脱敏、重复判断、版本冲突、旧连接误判、工具注册等待、真实非 MCP 程序拒绝、引用改写为凭证模板、硬约束与错误 code、项目级导入、坏条目容错、验证结果持久化、启停后重新验证、推送通道、复诊、备份占位符等 |
 | `npm run check` | Host JavaScript 语法检查通过 |
 | `npm run build` | 插件浏览器模块及独立预览构建通过 |
-| `npm run test:e2e` | 通过：临时 `DSH_HOME` + `web` 模板 profile，真实 `/api/dsh-mcp-hub/*` 路由跑完 stdio 全链路（列表、扫描、测试、添加、验证、工具、启停、重启、删除）与 Streamable HTTP 全链路（静态 Bearer、凭证模板、凭证轮换重连、错误 token 判为需要认证）；不写用户 profile |
+| `npm run test:e2e` | 通过：临时 `DSH_HOME` + `web` 模板 profile，真实 `/api/dsh-mcp-hub/*` 路由跑完 stdio 全链路（列表、扫描、测试、添加、验证、工具、启停、重启、删除）与 Streamable HTTP 全链路（静态 Bearer、凭证模板、凭证轮换重连、错误 token 判为需要认证）；删除后等官方清理行消失；不写用户 profile |
 | `npm run test:ui` | 通过：无头 Chrome 在临时 profile 上点完设置页 —— 导航到 MCP Hub、空状态、导入页签、JSON 粘贴逐行测试、一次添加两个并显示已连接、删除弹窗与删后空状态、页签切换草稿保留 |
+| `node scripts/assert-pack.mjs` | 通过：`npm pack --dry-run --json --ignore-scripts` 的清单含 21 个文件，Host / 共享模块 / 浏览器模块 / 样式 / patch / locale / icon / 文档 / LICENSE 齐全，复审报告未进包 |
+| CI | 已接入 `.github/workflows/ci.yml`：基础作业公开 runner 可跑；端到端作业需自托管 runner（`DSH_E2E_RUNNER=true` + `dsh` 标签），CI 内 `DSH_E2E_REQUIRED=1` 禁止 SKIP |
 | `npm run test:integration` | 1 项真实集成测试通过：官方 DSH 0.2.2-rc.3 临时 profile 中，测试不持久化、保存持久化、连接、工具注册、显式读取、重复判断、停用、停用编辑和删除 |
 | 桌面实机验收 | 见「第一轮桌面验收」：安装、挂载、列表、测试、添加与验证、工具、启停、删除均通过；重启缺陷已修 |
 | 浏览器验收 | 预览中验证 JSON 自动识别、env 引用显示与缺失提示、删除弹窗、删除后重新导入、保存关闭、Toast 消失和深浅色布局 |
 | 预览 HTTP 接口 | 真实调用接口，确认可执行文件存在但不实现 MCP 时返回失败 |
-| 安装包 | 已检查浏览器模块能加载，Host 与共享模块进入 tarball；构建产物和 tarball 不进入 Git |
+| 安装包 | 已检查浏览器模块能加载，Host 与共享模块进入 tarball，并断言清单从 21 个文件起不再缩水；构建产物和 tarball 不进入 Git |
 
 验证使用受控 MCP 和临时文件，不代表所有来源应用的全部版本、全部平台或真实远程服务均已验收。高德示例验证了解析与缺失变量提示，未使用真实高德密钥完成业务调用。
 

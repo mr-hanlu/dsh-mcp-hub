@@ -14,6 +14,20 @@ import { join } from 'node:path';
 export const APP_CLI = '/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh';
 export const sleep = ms => new Promise(done => setTimeout(done, ms));
 
+/**
+ * 缺少运行条件（没有 dsh / 没有 Chrome）时的统一出口。
+ * 本机开发默认打印 SKIP 并以 0 退出；CI 里设 `DSH_E2E_REQUIRED=1` 就把 SKIP
+ * 当成失败——否则 runner 没装 DSH 时会「绿灯通过但什么都没测」。
+ */
+export function skip(reason) {
+  if (process.env.DSH_E2E_REQUIRED === '1') {
+    console.error('FAIL ' + reason + '（DSH_E2E_REQUIRED=1，不允许跳过）');
+    process.exitCode = 1;
+    return;
+  }
+  console.log('SKIP ' + reason);
+}
+
 /** `DSH_BIN` 优先，其次 PATH，最后是桌面应用自带的 launcher。 */
 export function findDsh() {
   if (process.env.DSH_BIN) return process.env.DSH_BIN;

@@ -1,0 +1,90 @@
+name: CI
+
+# 三层验证里，前两层能在公开 runner 上跑；端到端需要装了 DSH 的机器，
+# 走自托管 runner，由仓库变量 DSH_E2E_RUNNER 打开（见 README「持续集成」）。
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: 单测 / 语法 / 构建 / 打包
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: 安装依赖（严格按 lockfile）
+        run: npm ci
+
+      - name: 单元测试
+        run: npm test
+
+      - name: Host 与共享模块语法检查
+        run: npm run check
+
+      - name: 构建浏览器模块
+        run: npm run build
+
+      - name: 生成打包清单
+        # --ignore-scripts：build 已在上一跑过，这里只要纯 JSON 输出（prepack 的日志会污染 stdout）。
+        run: npm pack --dry-run --json --ignore-scripts > pack.json
+
+      - name: 校验打包内容
+        run: node scripts/assert-pack.mjs pack.json
+
+      - name: 保留打包清单
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pack-manifest
+          path: pack.json
+          if-no-files-found: ignore
+
+  e2e:
+    name: 端到端（真实 Host + 临时 profile）
+    needs: checks
+    # 没配自托管 runner 时整个 job 跳过，不会挂起等待。
+    if: vars.DSH_E2E_RUNNER == 'true'
+    runs-on: [self-hosted, dsh]
+    env:
+      # 留空则回退到 PATH 上的 dsh，再回退到桌面应用自带的 launcher。
+      DSH_BIN: ${{ vars.DSH_BIN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 构建浏览器模块
+        run: npm run build
+
+      - name: 接口层端到端
+        # DSH_E2E_REQUIRED=1：找不到 dsh 时不能 SKIP 成绿灯。
+        env:
+          DSH_E2E_REQUIRED: '1'
+        run: npm run test:e2e
+
+      - name: 页面层端到端
+        # 两条端到端都默认占用 127.0.0.1:3080，必须串行跑。
+        env:
+          DSH_E2E_REQUIRED: '1'
+          CHROME_PATH: ${{ vars.DSH_E2E_CHROME_PATH }}
+        run: npm run test:ui

@@ -10,13 +10,14 @@
  *
  * 用法：npm run test:ui
  * 依赖本机 Chrome（用 CHROME_PATH 覆盖）与 puppeteer-core（devDependency）。
- * 找不到 dsh 或 Chrome 时打印 SKIP 并以 0 退出。
+ * 找不到 dsh 或 Chrome 时打印 SKIP 并以 0 退出；CI 里设 `DSH_E2E_REQUIRED=1`
+ * 让 SKIP 变成失败。
  */
 import { dirname } from 'node:path';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
-import { bootProfile, createProfile, findDsh, sleep } from './support/profile.mjs';
+import { bootProfile, createProfile, findDsh, skip, sleep } from './support/profile.mjs';
 
 const repoRoot = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 const fixture = repoRoot + '/tests/manual/echo-server.mjs';
@@ -84,8 +85,8 @@ async function pasteJson(page, value) {
 
 async function main() {
   const bin = findDsh();
-  if (!bin) { console.log('SKIP 页面验收：本机没有可执行的 dsh（可用 DSH_BIN 指定）。'); return; }
-  if (!existsSync(CHROME)) { console.log('SKIP 页面验收：找不到 Chrome（可用 CHROME_PATH 指定）。'); return; }
+  if (!bin) { skip('页面验收：本机没有可执行的 dsh（可用 DSH_BIN 指定）。'); return; }
+  if (!existsSync(CHROME)) { skip('页面验收：找不到 Chrome（可用 CHROME_PATH 指定）。'); return; }
 
   const { default: puppeteer } = await import('puppeteer-core');
   const profile = await createProfile({ bin, repoRoot });

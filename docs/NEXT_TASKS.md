@@ -55,18 +55,18 @@
 - [ ] 页面流程补剩余分支：重名改名/跳过、env 补全、隐藏值改名、保存后关闭、失败保留、测试取消与超时。
 - [ ] 覆盖删除后重新导入、外部配置变更、连续操作以及测试期间关闭 / 卸载。
 - [x] 使用受控本地 MCP 与临时目录（`tests/manual/echo-server.mjs`、临时 `DSH_HOME`），不依赖 npx 在线下载或真实账户。
-- [ ] 接入 CI（见 P0-6）。
+- [x] 接入 CI（见 P0-6）。
 
 验收标准：干净检出后按文档即可复现；失败有可定位输出；不需要开发机现存的 `/tmp` 或 profile 数据。
 
 ### 6. 接入 CI
 
-没有 CI 是目前唯一还完全空着的工程项：三层测试（单测 / 接口端到端 / 页面端到端）都只能手跑。
+`.github/workflows/ci.yml` 已接入；本地基线先跑通（单测 101 项、`check`、`build`、两条端到端、打包清单 21 个文件全部通过）。
 
-- [ ] 基础流水线：`npm ci` → `npm test` → `npm run check` → `npm run build` → `npm pack --dry-run` 并断言包内容（`lib/client.js`、`lib/style.css`、`cordis.patch.yml`、`locale/`、`icon.svg`、`src/host`、`src/shared`）。这一层不需要 DSH，公开 runner 即可。
-- [ ] 端到端流水线（需要装了 DSH 的机器）：`npm run test:e2e` 与 `npm run test:ui`。建议自托管 runner 或夜间任务；没有 DSH 时两者都会打印 SKIP 并以 0 退出，所以可以用 `DSH_BIN` 判断是否真正跑过。
-- [ ] 判定与产物：任一断言失败要附上脚本输出的 JSON 报告；`test:ui` 失败时保留截图（目前未实现，需要给脚本加 `--screenshot` 之类的最小钩子）。
-- [ ] 缓存：`~/.npm` 与 `node_modules`；`puppeteer-core` 不下载浏览器，Chrome 由 runner 提供（`CHROME_PATH`）。
+- [x] 基础流水线：`npm ci` → `npm test` → `npm run check` → `npm run build` → `npm pack --dry-run --json --ignore-scripts` 交给 `scripts/assert-pack.mjs` 断言包内容（`lib/client.js`、`lib/style.css`、`cordis.patch.yml`、`locale/`、`icon.svg`、`src/host`、`src/shared`、`README.md`、`LICENSE`），并断言复审报告不进包。这一层不需要 DSH，公开 runner 即可。
+- [x] 端到端流水线（需要装了 DSH 的机器）：`npm run test:e2e` 与 `npm run test:ui` 串行跑在一个带 `dsh` 标签的自托管 runner 上，由仓库变量 `DSH_E2E_RUNNER=true` 打开（未打开时整个 job 跳过，不会挂起）。CI 里设 `DSH_E2E_REQUIRED=1`，把「找不到 dsh / Chrome」从 SKIP 变成失败——否则 runner 没装 DSH 时会绿灯通过但什么都没测。
+- [ ] 判定与产物：脚本的 JSON 报告已经完整打在作业日志里；`test:ui` 失败时的截图钩子仍未实现（需要给脚本加 `--screenshot` 之类的最小开关）。
+- [x] 缓存：基础作业用 `setup-node` 的 npm 缓存；自托管 runner 不缓存 `node_modules`，每次 `npm ci` 保证干净。`puppeteer-core` 不下载浏览器，Chrome 由 runner 提供（`DSH_E2E_CHROME_PATH`）。
 
 验收标准：一次干净 clone 后推送即可看到绿灯；失败时能直接定位到步骤；端到端在无人值守下可重复（不依赖开发机现存的 `/tmp`、profile 或 Chrome 用户目录）。
 
@@ -80,7 +80,7 @@
 | 批量添加（已完成） | JSON 页逐行解析/测试，全部通过后一次 revision 写入；同名跳过，失败零写入；成功后可撤销未修改的整批 |
 | 冲突内解决（已完成） | 版本冲突可在窗口内同步最新版本后继续保存 |
 | 测试取消与更清晰的阶段进度 | 用户可停止等待；取消后关闭连接；不能误显示保存成功 |
-| 启停不刷新验证结论（2026-11-17 发现） | 手动「启用」不会启动新的验证，行内仍显示上一次保存时的「验证通过」；应在启用后重新验证，或清空旧结论再显示「连接中」 |
+| 启停后验证结论不刷新（已完成 2026-11-18） | 手动启用会为新的连接代次重开验证，停用会结束仍在跑的验证，批量启停同样处理；刚写回 `enabled` 但官方实例仍停在 `disabled` 时，验证只等启动、不误判为取消 |
 | 表单错误与冲突处理 | 尽量定位到字段；revision 冲突能核对最新值，避免反复提交旧 revision |
 | 运行环境帮助 | 命令绝对路径、PATH、目录、变量引用与凭证引用的差异可直接理解 |
 | 来源缓存与状态刷新（状态部分已完成：长轮询推送；来源缓存仍待定） | 明确手动文件候选保留范围；窗口重开、外部修改及并发刷新不显示旧状态 |
@@ -129,13 +129,12 @@
 
 ## 下一次开发的建议顺序
 
-截至 2026-11-18：安装、Host 侧验收、`test:e2e`（stdio + HTTP + 凭证）、`test:ui`（页面主流程）都已完成并通过。
+截至 2026-11-18：安装、Host 侧验收、`test:e2e`（stdio + HTTP + 凭证）、`test:ui`（页面主流程）、CI、启停后重新验证都已完成；本地基线全绿（单测 106 项、`check`、`build`、两条端到端、打包清单）。
 
-1. 复现基线：`npm ci && npm test && npm run check && npm run build`，再跑 `npm run test:e2e` 与 `npm run test:ui`（各约 1 分钟）。
-2. **做 P0-6 接入 CI**：这是当前唯一完全空着的工程项，做完之后每次改动都有自动回归。
-3. 补 P0-1 剩余的人工项（主题与窄窗口、重启 DSH 后恢复、凭证缺失 / 凭证服务不可用），这些只能在桌面实例上验。
-4. 补 P0-5 的页面分支（重名改名/跳过、env 补全、隐藏值改名、保存后关闭、失败保留、测试取消）。
-5. 再进入认证：Token 助手（凭证写入端点 + 认证状态），然后是 OAuth 授权与刷新。
+1. 复现基线：`npm ci && npm test && npm run check && npm run build`，再**串行**跑 `npm run test:e2e` 与 `npm run test:ui`（各约 1 分钟；两者都默认占 `127.0.0.1:3080`，并行会 EADDRINUSE）。推送后确认 CI 的 checks 作业为绿；要跑端到端按 README「持续集成」挂 runner。
+2. **补 P0-1 剩余的人工项**（主题与窄窗口、重启 DSH 后恢复、凭证缺失 / 凭证服务不可用），这些只能在桌面实例上验；启停后的验证结论已能在诊断页直接核对。
+3. 补 P0-5 的页面分支（重名改名/跳过、env 补全、隐藏值改名、保存后关闭、失败保留、测试取消），顺手补 P0-6 的失败截图钩子。
+4. 再进入认证：Token 助手（凭证写入端点 + 认证状态），然后是 OAuth 授权与刷新。
 
 ## 提交与发布约定
 

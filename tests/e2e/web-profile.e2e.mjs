@@ -11,14 +11,15 @@
  *
  * 用法：npm run test:e2e
  *      DSH_BIN=/path/to/dsh npm run test:e2e
- * 找不到 dsh 时打印 SKIP 并以 0 退出。页面级流程见 `ui-page.e2e.mjs`。
+ * 找不到 dsh 时打印 SKIP 并以 0 退出；CI 里设 `DSH_E2E_REQUIRED=1` 让 SKIP 变成失败，
+ * 避免「环境没装 DSH」被当成通过。页面级流程见 `ui-page.e2e.mjs`。
  */
 import { spawn } from 'node:child_process';
 import { chmod, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
-import { bootProfile, createApi, createProfile, findDsh, sleep } from './support/profile.mjs';
+import { bootProfile, createApi, createProfile, findDsh, skip, sleep } from './support/profile.mjs';
 
 const repoRoot = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 const stdioFixture = repoRoot + '/tests/manual/echo-server.mjs';
@@ -44,7 +45,7 @@ function startHttpFixture(tokenFile) {
 async function main() {
   const bin = findDsh();
   if (!bin) {
-    console.log('SKIP 端到端验收：本机没有可执行的 dsh（可用 DSH_BIN 指定）。');
+    skip('端到端验收：本机没有可执行的 dsh（可用 DSH_BIN 指定）。');
     return;
   }
   const profile = await createProfile({ bin, repoRoot });
@@ -66,13 +67,27 @@ async function main() {
         await sleep(300);
       }
     };
-    /** 验证失败会自动停用，那次写入会推进 revision；删除要容忍这种并发。 */
+    /**
+     * 验证失败会自动停用，那次写入会推进 revision；删除要容忍这种并发。
+     *
+     * 删除接口返回 200 之后，官方 Manager 仍可能保留一段 `managed: 'cleanup'`
+     * 的「已删除，清理中」行（实测重启后立即删除约 200ms）。接口成功不等于列表
+     * 已干净，所以这里等行真正消失，而不是拿到 200 就断言长度。
+     */
     const removeRow = async name => {
       for (let attempt = 0; attempt < 4; attempt += 1) {
         const current = await servers();
         if (!current.servers.some(item => item.name === name)) return;
         const removed = await call('/mutate', { action: 'remove', revision: current.revision, name });
-        if (removed.body?.ok) return;
+        if (removed.body?.ok) {
+          const started = Date.now();
+          while (Date.now() - started < 15000) {
+            const view = await servers();
+            if (!view.servers.some(item => item.name === name)) return;
+            await sleep(200);
+          }
+          assert.fail('删除 ' + name + ' 后仍残留未清理的行');
+        }
         if (removed.body?.code !== 'REVISION_CONFLICT') {
           assert.fail('删除 ' + name + ' 失败：' + JSON.stringify(removed.body));
         }
