@@ -2,7 +2,7 @@
 
 更新日期：2026-11-18（Asia/Shanghai）
 
-> 收工状态：单测 118 项、`check`、`build`、`test:e2e`（stdio + 启动/重连边界 + HTTP + 凭证）、`test:ui`（页面主流程）全部通过；桌面实例已 link 安装并完成第一轮验收。CI 基础流水线与端到端作业已接入；启停后的验证结论已能刷新；密钥已统一写入 DSH 凭证服务，配置只保留引用。下一步是补桌面人工项，见 [后续任务](NEXT_TASKS.md#下一次开发的建议顺序)。
+> 收工状态：单测 125 项、`check`、`build`、`test:e2e`（stdio + 启动/重连边界 + HTTP + 凭证 + 删除后同名重加）、`test:ui`（页面主流程）全部通过；桌面实例已 link 安装并完成第一轮验收。CI 基础流水线与端到端作业已接入；启停后的验证结论已能刷新；密钥已统一写入 DSH 凭证服务，配置只保留引用；删除后清理期的同名重加不再误报重名。下一步是补齐页面剩余小交互与桌面人工项，见 [后续任务](NEXT_TASKS.md#下一次开发的建议顺序)。
 
 ## 当前版本与状态
 
@@ -11,6 +11,28 @@
 - 尚未发布到 npm、插件市场或创建正式发布标签；本次只进行本地 Git 提交，push 由仓库维护者执行。
 - 功能重点为「已添加」「本地导入」和「在线搜索」；在线搜索只接官方 MCP Registry，选择后预填编辑页，不静默安装。
 - 桌面 `desktop` profile 已用 link 方式安装：`~/.dsh/profiles/desktop/package.json` 里 `dsh-mcp-hub` 指向本仓库，bundles 也含它；第一轮验收见下文。尚未系统验收的是主题与窄窗口、重启 DSH 后的恢复、凭证缺失与凭证服务不可用这些人工项。
+
+## 本轮（2026-11-18）：删除后清理期的同名重加
+
+用户视角的问题是：删掉一个服务后马上用同一个名字重新添加，界面在名称框就提示「已存在同名服务」，Host 也回 `NAME_TAKEN`「已有同名服务器，请修改名称」。核对官方 `@deepseek-ai/dsh-mcp-manager` 源码后确认这不是重名：
+
+- `list()` 的条目来自 `配置键 ∪ instances`；`unmount()` 只有清理失败（`closeConfirmed === false` 或有 `cleanupError`）时才把实例留在 `instances` 里，否则 dispose 一结束就删除。
+- 所以「已删除，清理中」这一行是「配置里已经没有、实例还没退完」的过渡状态：正常删除持续几十到几百毫秒，清理失败时留到宿主重启。
+
+| 位置 | 处理 |
+| --- | --- |
+| `src/host/service.js` 保存分支 | 重名判断拆成两档：配置里已有或存在 `configured !== false` 的运行中条目 → `NAME_TAKEN`；只剩 `configured === false` 的清理行 → 新的 `NAME_CLEANING`，提示里带上官方清理失败原因和「重启 DSH」的出路（`cleaningMessage()`） |
+| `src/host/service.js` 批量导入 | 清理中的同名不再被当成「已存在」静默跳过（那会让人以为已经添加过），改为整批拒绝并给 `NAME_CLEANING`，零写入 |
+| `src/shared/errors.js` | `NAME_CLEANING: 409` |
+| `src/shared/servers.js`（新增） | `takenNames()` 让编辑器不再把 `cleanup` 行算作已占用名称；`retryWhileCleaning()` 在保存 / 批量添加遇到 `NAME_CLEANING` 时短暂重试（6 次 × 350ms），用户不必为几百毫秒的清理再点一次保存 |
+| `src/client/App.jsx` | 编辑器 `existing` 改用 `takenNames()`；表单保存、JSON 编辑保存、批量添加三处写入包上 `retryWhileCleaning()` |
+| `tests/service.test.mjs` | 新增 3 项：清理期的同名重加报 `NAME_CLEANING` 且清理行消失后同名可添加、运行中的同名仍报 `NAME_TAKEN`、批量导入遇到清理行整批不写 |
+| `tests/servers.test.mjs`（新增） | 4 项：`cleanup` 行不占用名字、`NAME_CLEANING` 会被重试、其他错误不重试、重试用尽后抛出 Host 原文 |
+| `tests/e2e/web-profile.e2e.mjs` | 新增 2 步：运行中的同名保存仍判 `NAME_TAKEN`（确认放宽的只有清理行）；删除后立刻同名重新添加，只允许 `NAME_CLEANING`/`REVISION_CONFLICT` 后重试成功，并记录是否真的撞上清理窗口 |
+
+未做：清理失败后「永久残留」的行只能重启 DSH 清除，这条路径没有自动化（官方 `closeTimeoutMs` 在本机实测不生效，无法稳定制造保留行），目前由单测覆盖结论与文案。
+
+验证：`npm test` 125 项、`npm run check`、`npm run build`、`npm run test:e2e`（26 步）、`npm run test:ui`（16 步）全部通过。
 
 ## 本轮（换机后）修订：安装文档、依赖边界与认证结论
 
@@ -33,7 +55,7 @@
 | `test:e2e` 报「删除后仍在列表里 1 !== 0」 | 重启后立即删除，`/mutate` 返回 200，但官方 Manager 会先留一行 `managed: 'cleanup'`（状态 `connecting`）约 200ms 再移除；测试拿到 200 就立刻断言列表长度 | `removeRow` 在删除成功后轮询 `/servers`，最多 15s 等该行真正消失，超时才失败。产品行为本身是对的，不用改 Host |
 | `test:ui` 起不来：`Cannot find package 'puppeteer-core'` | lockfile 里有 devDependency，当前 `node_modules` 没装（开发机 npm 全局缓存有 root-owned 文件，`npm ci` 直接报错） | 用独立缓存重装：`npm ci --cache /tmp/npm-cache-mcphub`；之后两条端到端都跑通 |
 | CI 里「runner 没装 DSH」会假绿 | 两条端到端找不到 `dsh` / Chrome 时打印 SKIP 并以 0 退出 | `tests/e2e/support/profile.mjs` 新增 `skip(reason)`：`DSH_E2E_REQUIRED=1` 时改成失败，CI 用它把 SKIP 变成红 |
-| 打包内容没有自动断言 | 只有人工检查过 tarball | 新增 `scripts/assert-pack.mjs`，用 `npm pack --dry-run --json --ignore-scripts` 的清单断言必需文件齐全、复审报告不进包（当前 21 个文件） |
+| 打包内容没有自动断言 | 只有人工检查过 tarball | 新增 `scripts/assert-pack.mjs`，用 `npm pack --dry-run --json --ignore-scripts` 的清单断言必需文件齐全、复审报告不进包（当前 23 个文件） |
 
 CI：`.github/workflows/ci.yml` 分两个作业。`checks` 在 `ubuntu-latest` 上跑 `npm ci` → `npm test` → `npm run check` → `npm run build` → 打包清单校验并上传清单；`e2e` 走带 `dsh` 标签的自托管 runner，由仓库变量 `DSH_E2E_RUNNER=true` 打开，未打开时整个作业跳过，两条端到端串行（都默认占 `127.0.0.1:3080`，并行会 EADDRINUSE）。
 
@@ -229,18 +251,18 @@ CI：`.github/workflows/ci.yml` 分两个作业。`checks` 在 `ubuntu-latest` �
 
 | 验证方式 | 结果与覆盖范围 |
 | --- | --- |
-| `npm test` | 115 项通过：格式解析、高德配置回归、env 缺失与凭据判定、脱敏、重复判断、版本冲突、旧连接误判、工具注册等待、真实非 MCP 程序拒绝、密钥写入凭证服务与名称生成/冲突/独占轮换、reveal 与导出解析、硬约束与错误 code、项目级导入、坏条目容错、验证结果持久化、启停后重新验证、推送通道、复诊、备份占位符等 |
+| `npm test` | 125 项通过：格式解析、高德配置回归、env 缺失与凭据判定、脱敏、重复判断、版本冲突、旧连接误判、工具注册等待、真实非 MCP 程序拒绝、密钥写入凭证服务与名称生成/冲突/独占轮换、reveal 与导出解析、硬约束与错误 code、项目级导入、坏条目容错、验证结果持久化、启停后重新验证、推送通道、复诊、备份占位符、删除后清理期的同名重加与重试（`NAME_CLEANING`）等 |
 | `npm run check` | Host JavaScript 语法检查通过 |
 | `npm run build` | 插件浏览器模块及独立预览构建通过 |
-| `npm run test:e2e` | 通过：临时 `DSH_HOME` + `web` 模板 profile，真实 `/api/dsh-mcp-hub/*` 路由跑完 stdio 全链路（列表、扫描、测试、添加、验证、工具、启停、重启、删除）、启动/重连边界（2.5 秒慢握手、2 秒慢工具发现、握手后退出进入重连退避）与 Streamable HTTP 全链路（静态 Bearer、凭证模板、凭证轮换重连、错误 token 判为需要认证）；删除后等官方清理行消失；不写用户 profile |
+| `npm run test:e2e` | 通过：临时 `DSH_HOME` + `web` 模板 profile，真实 `/api/dsh-mcp-hub/*` 路由跑完 stdio 全链路（列表、扫描、测试、添加、验证、工具、启停、重启、删除）、启动/重连边界（2.5 秒慢握手、2 秒慢工具发现、握手后退出进入重连退避）与 Streamable HTTP 全链路（静态 Bearer、凭证模板、凭证轮换重连、错误 token 判为需要认证）；删除后等官方清理行消失、删除后立刻同名重加（运行中的同名仍判 `NAME_TAKEN`）；不写用户 profile |
 | `npm run test:ui` | 通过：无头 Chrome 在临时 profile 上点完设置页 —— 导航到 MCP Hub、空状态、导入页签、JSON 粘贴逐行测试、一次添加两个并显示已连接、重名跳过、测试进度与取消、连接失败原因、缺失环境变量、编辑已有服务、保存后关闭、删除弹窗与删后空状态、页签切换草稿保留；失败留截图 |
-| `node scripts/assert-pack.mjs` | 通过：`npm pack --dry-run --json --ignore-scripts` 的清单含 21 个文件，Host / 共享模块 / 浏览器模块 / 样式 / patch / locale / icon / 文档 / LICENSE 齐全，复审报告未进包 |
+| `node scripts/assert-pack.mjs` | 通过：`npm pack --dry-run --json --ignore-scripts` 的清单含 23 个文件，Host / 共享模块 / 浏览器模块 / 样式 / patch / locale / icon / 文档 / LICENSE 齐全，复审报告未进包 |
 | CI | 已接入 `.github/workflows/ci.yml`：基础作业公开 runner 可跑；端到端作业需自托管 runner（`DSH_E2E_RUNNER=true` + `dsh` 标签），CI 内 `DSH_E2E_REQUIRED=1` 禁止 SKIP |
 | `npm run test:integration` | 1 项真实集成测试通过：官方 DSH 0.2.2-rc.3 临时 profile 中，测试不持久化、保存持久化、连接、工具注册、显式读取、重复判断、停用、停用编辑和删除 |
 | 桌面实机验收 | 见「第一轮桌面验收」：安装、挂载、列表、测试、添加与验证、工具、启停、删除均通过；重启缺陷已修 |
 | 浏览器验收 | 预览中验证 JSON 自动识别、env 引用显示与缺失提示、删除弹窗、删除后重新导入、保存关闭、Toast 消失和深浅色布局 |
 | 预览 HTTP 接口 | 真实调用接口，确认可执行文件存在但不实现 MCP 时返回失败 |
-| 安装包 | 已检查浏览器模块能加载，Host 与共享模块进入 tarball，并断言清单从 21 个文件起不再缩水；构建产物和 tarball 不进入 Git |
+| 安装包 | 已检查浏览器模块能加载，Host 与共享模块进入 tarball，并断言清单从 23 个文件起不再缩水；构建产物和 tarball 不进入 Git |
 
 验证使用受控 MCP 和临时文件，不代表所有来源应用的全部版本、全部平台或真实远程服务均已验收。高德示例验证了解析与缺失变量提示，未使用真实高德密钥完成业务调用。
 
