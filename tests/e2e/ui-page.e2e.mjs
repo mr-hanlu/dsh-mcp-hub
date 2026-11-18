@@ -10,6 +10,7 @@
  *   - 连接测试进行中显示进度并可取消
  *   - 已存在的同名服务在粘贴后标为跳过，只测试、只添加新服务
  *   - 连接测试失败时行内给出失败状态，且不允许添加
+ *   - 环境变量引用缺失时指出缺哪一项
  *   - 保存成功后编辑器自动关闭
  * 失败时会往 tests/e2e/artifacts/ 留一张全页截图。
  *
@@ -153,6 +154,12 @@ async function main() {
     });
     assert.equal(addDisabled, true, '测试失败后仍允许添加');
     step('test-fail-reason', { ok: true });
+
+    // 缺失环境变量：引用不存在时测试要直接指出缺哪一项，而不是报告连接超时。
+    await pasteJson(page, JSON.stringify({ mcpServers: { uienv: { command: process.execPath, args: [fixture], cwd: repoRoot, env: { TOKEN: '${env:MCP_E2E_MISSING}' } } } }, null, 2));
+    assert.equal(await clickLabel(page, '测试全部'), true, '找不到「测试全部」');
+    await waitForText(page, '缺少变量：MCP_E2E_MISSING', { label: '缺失环境变量提示', timeoutMs: 30000 });
+    step('env-missing', { ok: true });
 
     const entry = command => ({ command, args: [fixture], cwd: repoRoot });
     const document = { mcpServers: { uitest1: entry(process.execPath), uitest2: entry(process.execPath) } };

@@ -57,9 +57,9 @@ CI：`.github/workflows/ci.yml` 分两个作业。`checks` 在 `ubuntu-latest` �
 
 英文界面残留三处中文：目录详情「· 更新于」（文本节点被拼成 ` · 更新于 `，精确匹配不到）、保存冲突的「同步最新版本」、测试计数「测试中 n/m」；另有「（n 处与来源不同）」在英文下也漏译。已改为可翻译的文本节点、补词条，并补 i18n 单测。
 
-页面层同时补了两条分支：连接测试进行中原本把「测试全部」按钮整个撤掉，进度文案是死代码；现在按钮保留并显示「测试中 n/m」，旁边是「取消测试」。`test:ui` 增加测试进度/取消、重名跳过、连接失败原因、保存后关闭四步，失败写全页截图；`tests/manual/echo-server.mjs` 支持 `MCP_ECHO_DELAY` 放慢握手，保证取消有可点的窗口。
+页面层同时补了两条分支：连接测试进行中原本把「测试全部」按钮整个撤掉，进度文案是死代码；现在按钮保留并显示「测试中 n/m」，旁边是「取消测试」。`test:ui` 增加测试进度/取消、重名跳过、连接失败原因、缺失环境变量、保存后关闭五步，失败写全页截图；`tests/manual/echo-server.mjs` 支持 `MCP_ECHO_DELAY` 放慢握手，保证取消有可点的窗口。
 
-验证：`npm test`、`npm run check`、`npm run build`、`npm run test:e2e`、`npm run test:ui`（12 步）全部通过。
+验证：`npm test`、`npm run check`、`npm run build`、`npm run test:e2e`、`npm run test:ui`（13 步）全部通过。
 
 ## 第一轮桌面验收（2026-11-17）
 
@@ -85,7 +85,7 @@ CI：`.github/workflows/ci.yml` 分两个作业。`checks` 在 `ubuntu-latest` �
 顺手补的自动化（2026-11-18 补齐页面层与 HTTP/凭证）：
 
 - `npm run test:e2e`（`tests/e2e/web-profile.e2e.mjs`）：临时 `DSH_HOME` 里从 `web` 模板建 profile、link 本插件、启动真实 Host，用真实路由跑「列表 → 扫描 → 测试 → 添加 → 验证 → 工具 → 停用 → 启用 → 重启 → 删除」。
-- `npm run test:ui`（`tests/e2e/ui-page.e2e.mjs`）：同一套临时 profile 上跑无头 Chrome，真的点一遍页面 —— 设置 → MCP Hub、空状态、`本地导入` 页签、JSON 粘贴逐行测试、一次添加两个、行内「已连接」、重名跳过只添加新服务、测试进行中显示进度并可取消、测试失败显示原因且不能添加、保存后编辑器关闭、删除确认弹窗、删完回空状态，以及 JSON / 表单页签切换后草稿仍在；失败时自动写 `tests/e2e/artifacts/ui-failure-*.png`。
+- `npm run test:ui`（`tests/e2e/ui-page.e2e.mjs`）：同一套临时 profile 上跑无头 Chrome，真的点一遍页面 —— 设置 → MCP Hub、空状态、`本地导入` 页签、JSON 粘贴逐行测试、一次添加两个、行内「已连接」、重名跳过只添加新服务、测试进行中显示进度并可取消、测试失败显示原因且不能添加、缺失环境变量指出缺哪一项、保存后编辑器关闭、删除确认弹窗、删完回空状态，以及 JSON / 表单页签切换后草稿仍在；失败时自动写 `tests/e2e/artifacts/ui-failure-*.png`。
 
 `test:e2e` 之后又补了 Streamable HTTP 与凭证（2026-11-18，`tests/manual/echo-http-server.mjs` 作为受控服务）：
 
@@ -203,7 +203,7 @@ CI：`.github/workflows/ci.yml` 分两个作业。`checks` 在 `ubuntu-latest` �
 | `npm run check` | Host JavaScript 语法检查通过 |
 | `npm run build` | 插件浏览器模块及独立预览构建通过 |
 | `npm run test:e2e` | 通过：临时 `DSH_HOME` + `web` 模板 profile，真实 `/api/dsh-mcp-hub/*` 路由跑完 stdio 全链路（列表、扫描、测试、添加、验证、工具、启停、重启、删除）与 Streamable HTTP 全链路（静态 Bearer、凭证模板、凭证轮换重连、错误 token 判为需要认证）；删除后等官方清理行消失；不写用户 profile |
-| `npm run test:ui` | 通过：无头 Chrome 在临时 profile 上点完设置页 —— 导航到 MCP Hub、空状态、导入页签、JSON 粘贴逐行测试、一次添加两个并显示已连接、重名跳过、测试进度与取消、连接失败原因、保存后关闭、删除弹窗与删后空状态、页签切换草稿保留；失败留截图 |
+| `npm run test:ui` | 通过：无头 Chrome 在临时 profile 上点完设置页 —— 导航到 MCP Hub、空状态、导入页签、JSON 粘贴逐行测试、一次添加两个并显示已连接、重名跳过、测试进度与取消、连接失败原因、缺失环境变量、保存后关闭、删除弹窗与删后空状态、页签切换草稿保留；失败留截图 |
 | `node scripts/assert-pack.mjs` | 通过：`npm pack --dry-run --json --ignore-scripts` 的清单含 21 个文件，Host / 共享模块 / 浏览器模块 / 样式 / patch / locale / icon / 文档 / LICENSE 齐全，复审报告未进包 |
 | CI | 已接入 `.github/workflows/ci.yml`：基础作业公开 runner 可跑；端到端作业需自托管 runner（`DSH_E2E_RUNNER=true` + `dsh` 标签），CI 内 `DSH_E2E_REQUIRED=1` 禁止 SKIP |
 | `npm run test:integration` | 1 项真实集成测试通过：官方 DSH 0.2.2-rc.3 临时 profile 中，测试不持久化、保存持久化、连接、工具注册、显式读取、重复判断、停用、停用编辑和删除 |
