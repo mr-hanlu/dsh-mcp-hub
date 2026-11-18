@@ -228,6 +228,8 @@ html[data-ds-theme-source=light] body:has(.mcp-hub[data-preview=true]){backgroun
 .mcp-hub{padding-bottom:34px}
 
 .hub-confirm-dialog{width:460px}
+.hub-peeked{border-color:var(--hub-link)!important;background:color-mix(in srgb,var(--hub-link) 12%,transparent)!important;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.hub-renew-dialog{width:460px}
 .hub-confirm-dialog .hub-dialog-header h2{font-size:18px;margin:0}
 .hub-confirm-dialog .hub-dialog-body{line-height:1.9}
 .hub-confirm-dialog .hub-dialog-footer{justify-content:flex-end}

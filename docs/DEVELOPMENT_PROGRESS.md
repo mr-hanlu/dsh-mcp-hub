@@ -75,6 +75,7 @@ CI：`.github/workflows/ci.yml` 分两个作业。`checks` 在 `ubuntu-latest` �
 | 配置项 | `referenceStorage` 标记废弃，仅为兼容旧 profile 保留 |
 | `tests/service.test.mjs` | fixture 增加凭证服务替身（内存 Map）；新增 11 项：明文 header/env 入库、他服务占用名字加后缀、独占轮换、共享不覆盖、用户自定名保持、reveal 解析与缺失报错、导出含/不含密钥、draft 缺变量、args 与 URL 查询参数凭证化、批量导入同一环境变量各存一份（单测 106 → 117） |
 
+- 查看与更换：凭证引用的「显示」改为就地切只读明文（10 秒倒计时、同一时间只一行、Esc/再点收回），新增「复制」和「更换密钥」；更换密钥只改草稿，保存时复用 `planCredentials`（独占原地轮换、共享自动 fork），不新增 Host 接口。
 验证：`npm test` 117 项、`npm run check`、`npm run build`、`npm run test:e2e`、`npm run test:ui` 全部通过。
 
 ## 第一轮桌面验收（2026-11-17）

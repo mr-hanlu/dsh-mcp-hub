@@ -59,6 +59,16 @@ async function clickLabel(page, matcher, { timeoutMs = 8000 } = {}) {
 
 const bodyText = page => page.evaluate(() => document.body.innerText.replace(/\s+/g, ' '));
 
+async function waitForInputValue(page, value, { timeoutMs = 15000 } = {}) {
+  const started = Date.now();
+  for (;;) {
+    const ok = await page.evaluate(wanted => [...document.querySelectorAll('input')].some(input => input.value === wanted && input.type === 'text' && input.readOnly), value);
+    if (ok) return true;
+    if (Date.now() - started > timeoutMs) return false;
+    await sleep(120);
+  }
+}
+
 async function waitForText(page, matcher, { timeoutMs = 30000, label } = {}) {
   const started = Date.now();
   for (;;) {
@@ -224,7 +234,17 @@ async function main() {
     assert.equal(await clickLabel(page, '编辑 uiauth'), true, '凭据化步骤找不到「编辑 uiauth」');
     await waitForText(page, '编辑 MCP 服务', { label: '凭据化编辑窗口' });
     assert.equal(await clickLabel(page, '显示'), true, '凭据化步骤找不到「显示」');
-    await waitForText(page, 'sk-live-e2e-0123456789abcdef', { label: '凭证查看', timeoutMs: 15000 });
+    assert.equal(await waitForInputValue(page, 'sk-live-e2e-0123456789abcdef'), true, '凭证值没有出现在只读输入框');
+    assert.equal(await clickLabel(page, '复制'), true, '凭据化步骤找不到「复制」');
+    await waitForText(page, /已复制/, { label: '凭证复制提示' });
+    assert.equal(await clickLabel(page, '隐藏'), true, '凭据化步骤找不到「隐藏」');
+    const restored = await page.evaluate(() => [...document.querySelectorAll('input')].some(input => /^\$\{credential:/.test(input.value)));
+    assert.equal(restored, true, '隐藏后没有恢复引用模板');
+    assert.equal(await clickLabel(page, '更换密钥'), true, '凭据化步骤找不到「更换密钥」');
+    await waitForText(page, '新密钥', { label: '更换密钥弹窗' });
+    await page.type('input[aria-label="新密钥"]', 'sk-live-rotated-0123456789abcdef');
+    assert.equal(await clickLabel(page, '使用此密钥'), true, '更换密钥弹窗找不到「使用此密钥」');
+    await waitForText(page, '保存后写入 DSH 凭证', { label: '新密钥写入提示' });
     step('credential-reveal', { ok: true });
     assert.equal(await clickLabel(page, '关闭配置窗口'), true);
     await waitForText(page, /uiauth/, { label: '凭据化返回列表' });
