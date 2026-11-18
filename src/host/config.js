@@ -122,7 +122,9 @@ export function variableInfo(entry, ambient = process.env, missingOverride, sour
       return !ambient[name];
     });
     const source = refs.map(nameOf).map(name => sources[name]?.source).filter(Boolean).map(name => CREDENTIAL_SOURCE_LABEL[name] ?? name)[0];
-    return { field, key, kind: credentials.length ? '凭证引用' : refs.length ? '环境引用' : '直接填写', state: missing.length ? 'missing' : credentials.length ? 'credential' : value === '' ? 'empty' : 'configured', references: refs, missing, source };
+    // 缺哪个变量要报「名字」，不是带 `env:` 前缀的原始引用：检查结果里报的是名字，
+    // 行内提示也必须是同一个，否则用户会以为要填一个叫 env:X 的变量。
+    return { field, key, kind: credentials.length ? '凭证引用' : refs.length ? '环境引用' : '直接填写', state: missing.length ? 'missing' : credentials.length ? 'credential' : value === '' ? 'empty' : 'configured', references: refs, missing: missing.map(nameOf), source };
   }));
 }
 

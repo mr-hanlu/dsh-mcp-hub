@@ -15,6 +15,9 @@
  *   - 保存成功后编辑器自动关闭
  *   - 带明文 token 的服务保存后提示「密钥已写入 DSH 凭证」
  *   - 编辑时对凭证引用点「显示」能通过 Host 读回值
+ *   - 表单里缺引用时能「直接填写」补全，补完再测通过
+ *   - 重命名凭证引用行只换字段名，引用原样保留
+ *   - 测试失败后改配置能直接重测通过
  * 失败时会往 tests/e2e/artifacts/ 留一张全页截图。
  *
  * 用法：npm run test:ui
@@ -272,6 +275,74 @@ async function main() {
     assert.equal(await clickLabel(page, '删除'), true);
     await waitForText(page, '连接你的第一个 MCP', { label: '删除后空状态', timeoutMs: 30000 });
     step('delete-all', { ok: true, count: 0 });
+
+    // ---------- 表单里补全变量 ----------
+    // 引用找不到时不能只报一句错误：行内给出「直接填写」，填完再测就通过，保存时写入 DSH 凭证。
+    assert.equal(await clickLabel(page, '添加 MCP'), true, '找不到「添加 MCP」');
+    await waitForText(page, 'JSON 编辑', { label: '表单步骤的编辑器' });
+    assert.equal(await clickLabel(page, '表单配置'), true, '找不到「表单配置」');
+    await page.type('input[placeholder="例如 context7"]', 'uiform');
+    await page.type('input[placeholder="npx、uvx 或可执行文件的绝对路径"]', process.execPath);
+    assert.equal(await clickLabel(page, '＋ 添加参数'), true, '找不到「添加参数」');
+    await page.type('input[aria-label="启动参数 1"]', fixture);
+    await page.type('input[placeholder="留空由 DSH 决定"]', repoRoot);
+    assert.equal(await clickLabel(page, '＋ 添加一项'), true, '找不到「添加一项」');
+    await page.type('input[aria-label="环境变量值 1"]', '${env:MCP_E2E_MISSING}');
+    assert.equal(await clickLabel(page, '测试连接'), true, '找不到「测试连接」');
+    await waitForText(page, '找不到引用：MCP_E2E_MISSING', { label: '表单缺失变量', timeoutMs: 30000 });
+    assert.equal(await clickLabel(page, '直接填写'), true, '缺失引用的行没有「直接填写」');
+    // 用形如密钥的值：保存时会写进 DSH 凭证，重命名步骤才能验证「引用保持」。
+    await page.type('input[aria-label="环境变量值 1"]', 'sk-live-uiform-0123456789abcdef');
+    assert.equal(await clickLabel(page, '测试连接'), true, '补全值后找不到「测试连接」');
+    await waitForText(page, '连接正常', { label: '补全后的连接测试', timeoutMs: 30000 });
+    step('form-fill-variable', { ok: true });
+    assert.equal(await clickLabel(page, '添加'), true, '找不到「添加」');
+    await waitForText(page, /uiform.*已连接/, { label: '补全变量后添加', timeoutMs: 60000 });
+    step('form-add', { ok: true });
+
+    // ---------- 重命名凭证引用行 ----------
+    // 改名只换字段名，引用本身要原样保留，不能被读成明文再写一遍。
+    assert.equal(await clickLabel(page, '编辑 uiform'), true, '找不到「编辑 uiform」');
+    await waitForText(page, '编辑 MCP 服务', { label: '重命名前的编辑窗口' });
+    assert.equal(await clickLabel(page, '表单配置'), true, '编辑窗口里找不到「表单配置」');
+    assert.equal(await page.click('input[aria-label="环境变量名称 1"]', { clickCount: 3 }), undefined);
+    await page.type('input[aria-label="环境变量名称 1"]', 'RENAMED_KEY');
+    await page.keyboard.press('Tab');
+    await sleep(400);
+    const referenceRow = await page.evaluate(() => {
+      const input = document.querySelector('input[aria-label="环境变量值 1"]');
+      return input ? { value: input.value, readOnly: input.readOnly } : null;
+    });
+    assert.ok(referenceRow, '重命名后找不到环境变量值输入框');
+    assert.equal(referenceRow.readOnly, true, '重命名后凭证引用不该变成可编辑的明文');
+    assert.match(referenceRow.value, /^\$\{credential:MCPHUB_/, '重命名后凭证引用没有保留：' + referenceRow.value);
+    assert.equal(await clickLabel(page, '保存'), true, '重命名后找不到「保存」');
+    await waitForText(page, 'uiform 已保存', { label: '重命名保存' });
+    await waitForText(page, /uiform.*已连接/, { label: '重命名后重新连接', timeoutMs: 60000 });
+    step('rename-reference', { ok: true });
+
+    // ---------- 失败后改回去再保存 ----------
+    // 测试失败时编辑器把输入留在原地，改完直接重测就能通过。
+    assert.equal(await clickLabel(page, '添加 MCP'), true, '找不到「添加 MCP」');
+    await waitForText(page, 'JSON 编辑', { label: '修复步骤的编辑器' });
+    await pasteJson(page, JSON.stringify({ mcpServers: { uifix: { command: '/bin/sh', args: ['-c', 'exit 3'], cwd: repoRoot } } }, null, 2));
+    assert.equal(await clickLabel(page, '测试全部'), true, '找不到「测试全部」');
+    await waitForText(page, '测试失败', { label: '修复前的测试失败', timeoutMs: 30000 });
+    await pasteJson(page, JSON.stringify({ mcpServers: { uifix: { command: process.execPath, args: [fixture], cwd: repoRoot } } }, null, 2));
+    assert.equal(await clickLabel(page, '测试全部'), true, '改配置后找不到「测试全部」');
+    await waitForText(page, /已测试 1\/1/, { label: '改完重新测试' });
+    if (!(await clickLabel(page, /^添加 1 个$/))) throw new Error('改完找不到「添加 1 个」按钮');
+    await waitForText(page, /uifix.*已连接/, { label: '修复后添加成功', timeoutMs: 60000 });
+    step('fix-after-failure', { ok: true });
+
+    // 收尾：删掉这一步新增的两个服务，页面回到空状态。
+    for (const name of ['uiform', 'uifix']) {
+      assert.equal(await clickLabel(page, '删除 ' + name), true, '找不到「删除 ' + name + '」');
+      await waitForText(page, '删除 MCP 服务', { label: '删除弹窗' });
+      assert.equal(await clickLabel(page, '删除'), true);
+    }
+    await waitForText(page, '连接你的第一个 MCP', { label: '收尾空状态', timeoutMs: 30000 });
+    step('cleanup-extra', { ok: true, count: 0 });
   } catch (error) {
     // 失败时留一张全页截图，CI 的 artifact 能直接看到当时的界面。
     let screenshot = '';

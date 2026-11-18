@@ -185,6 +185,15 @@ function Pairs({ value = {}, onChange, label, field, variables = [], onReveal, p
   const [copied, setCopied] = useState(''), [editing, setEditing] = useState(null);
   const [verified, setVerified] = useState({});
   const idOf = useRowIds();
+  // 「填写值」把缺失引用的行换成空值后要能直接接着输入，不必再点一次输入框。
+  const inputs = useRef({});
+  const [focusKey, setFocusKey] = useState(null);
+  useEffect(() => {
+    const node = focusKey ? inputs.current[focusKey] : null;
+    if (!node) return;
+    node.focus();
+    setFocusKey(null);
+  }, [focusKey]);
   const entries = Object.entries(value);
   const set = (key, val) => onChange({ ...value, [key]: val });
   async function show(key, val) {
@@ -249,7 +258,7 @@ function Pairs({ value = {}, onChange, label, field, variables = [], onReveal, p
           ? <input aria-label={label+'值 '+(index+1)} type="password" autoFocus autoComplete="off" spellCheck="false" value={editing.value} placeholder="输入新密钥" onChange={event=>setEditing({...editing, value:event.target.value, error:''})} onKeyDown={event=>{ if(event.key==='Enter'){ event.preventDefault(); confirmRenew(); } }}/>
           : peek
             ? <input aria-label={label+'值 '+(index+1)} className="hub-peeked" type="text" readOnly value={peek.value} onFocus={event=>event.currentTarget.select()}/>
-            : <input aria-label={label+'值 '+(index+1)} readOnly={kind === 'credential' || verifiedHere} type={(secret || verifiedHere) && !revealed[key] ? 'password':'text'} value={verifiedHere ? String(val) : field === 'env' ? (typeof val === 'string' ? val : '') : shown} placeholder={field === 'env' ? '填写值' : kind==='literal'?'填写值':kind==='env'?'例如 GITHUB_TOKEN':'凭证名称'} autoComplete="off" onChange={event=>set(key, field === 'env' ? event.target.value : kind==='literal'?event.target.value:kind==='env'?prefix+'${env:'+event.target.value+'}':prefix+'${credential:'+event.target.value+'}')}/>}
+            : <input aria-label={label+'值 '+(index+1)} ref={node => { if (node) inputs.current[key] = node; }} readOnly={kind === 'credential' || verifiedHere} type={(secret || verifiedHere) && !revealed[key] ? 'password':'text'} value={verifiedHere ? String(val) : field === 'env' ? (typeof val === 'string' ? val : '') : shown} placeholder={field === 'env' ? '填写值' : kind==='literal'?'填写值':kind==='env'?'例如 GITHUB_TOKEN':'凭证名称'} autoComplete="off" onChange={event=>set(key, field === 'env' ? event.target.value : kind==='literal'?event.target.value:kind==='env'?prefix+'${env:'+event.target.value+'}':prefix+'${credential:'+event.target.value+'}')}/>}
         <span className="hub-row-actions">
           {editingHere
             ? <><IconButton icon="check" label="测试并保存" disabled={editing.busy || !editing.value.trim()} onClick={confirmRenew}/><IconButton icon="close" label="取消编辑" onClick={()=>setEditing(null)}/></>
@@ -262,7 +271,7 @@ function Pairs({ value = {}, onChange, label, field, variables = [], onReveal, p
         </span>
       </div>{editingHere
         ? <small className={editing.error ? 'bad' : 'hub-help'} role={editing.error ? 'alert' : undefined}>{editing.error || (editing.busy ? '正在测试连接…' : '测试通过后才会写入；失败保留原值')}</small>
-        : <small className={info?.state==='missing'?'bad':'hub-help'}>{peek ? <>已显示，剩 {remaining} 秒自动隐藏{copiedHere ? ' · 已复制' : ''}</> : copiedHere ? '已复制' : verifiedHere ? '新密钥已通过测试，保存后写入 DSH 凭证' : info?.state==='missing'?'找不到引用：'+info.missing.join('、'):info?.source?'已配置（来自 '+info.source+'）':kind==='credential'?'由 DSH 凭证服务解析，连接时验证':field==='env'&&secret?'保存后写入 DSH 凭证':field==='env'?'当前是引用；改为普通值会按明文保存':kind==='env'?'保存为 ${credential:…} 引用，连接时从 DSH 凭证服务读取':secret?'保存后写入 DSH 凭证':String(val).includes(MASK)?'已配置；保持原样将保留原值':val?'已填写':'未填写'}</small>}</div>;
+        : <small className={info?.state==='missing'?'bad':'hub-help'}>{peek ? <>已显示，剩 {remaining} 秒自动隐藏{copiedHere ? ' · 已复制' : ''}</> : copiedHere ? '已复制' : verifiedHere ? '新密钥已通过测试，保存后写入 DSH 凭证' : info?.state==='missing'?<>找不到引用：{info.missing.join('、')}；直接填写值即可，保存时写入 DSH 凭证<button type="button" className="hub-text-button" onClick={() => { set(key, ''); setFocusKey(key); }}>直接填写</button></>:info?.source?'已配置（来自 '+info.source+'）':kind==='credential'?'由 DSH 凭证服务解析，连接时验证':field==='env'&&secret?'保存后写入 DSH 凭证':field==='env'?'当前是引用；改成具体值会写入 DSH 凭证':kind==='env'?'保存为 ${credential:…} 引用，连接时从 DSH 凭证服务读取':secret?'保存后写入 DSH 凭证':String(val).includes(MASK)?'已配置；保持原样将保留原值':val?'已填写':'未填写'}</small>}</div>;
     })}
     {!entries.length && <p className="hub-help">没有额外的{label}。</p>}{error && <p className="bad" role="alert">{error}</p>}
   </div>;

@@ -14,6 +14,8 @@ test('English locale translates exact and dynamic messages', () => {
   assert.equal(translate('更新于 '), 'Updated ');
   assert.equal(translate('同步最新版本'), 'Sync latest');
   assert.equal(translate('测试中 2/5'), 'Testing 2/5');
+  assert.equal(translate('；直接填写值即可，保存时写入 DSH 凭证'), '. Type the value here; it is stored in DSH credentials on save.');
+  assert.equal(translate('当前是引用；改成具体值会写入 DSH 凭证'), 'This is currently a reference; typing a concrete value stores it in DSH credentials.');
   assert.equal(translate('将写入 DSH 的配置（2 处与来源不同）'), 'Configuration to write to DSH (2 differences from the source)');
 });
 

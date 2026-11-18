@@ -111,6 +111,19 @@ test('disabling a service ends the verification that was still running',async()=
   await service.mutate({action:'toggle',name:'demo',enabled:false,revision:1});
   assert.equal(service.verifications.get('demo').state,'cancelled');
 });
+test('a long first connect is explained instead of looking stuck',async()=>{
+  const {service}=fixture({waitMs:2000,status:{state:'connecting'}});
+  await service.mutate(body);
+  const record=service.verifications.get('demo');
+  assert.equal(record.detail,'正在连接…');
+  // 把开始时间推回 16 秒前：首次跑 npx 可能要下载依赖，这时要给解释而不是让用户以为卡死。
+  record.startedAt=Date.now()-16000;
+  await settle(60);
+  const current=service.verifications.get('demo');
+  assert.equal(current.state,'verifying');
+  assert.match(current.detail,/首次运行可能需要下载依赖/);
+  service.cancelVerification('demo');
+});
 test('a transient disabled status does not cancel an enable verification',async()=>{
   // 写回 enabled=true 之后、官方实例真正启动之前，状态可能还停在 disabled。
   const {service}=fixture({servers:{demo:{...body.entry,enabled:false}},status:{state:'disabled'},waitMs:600});

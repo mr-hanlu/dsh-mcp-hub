@@ -80,7 +80,8 @@ test('references remain visible and variable diagnostics identify the missing ke
   const entry={env:{TOKEN:'${env:MY_TOKEN}',AUTH:'${credential:AUTH}',SECRET:'private'}};
   assert.equal(redact(entry).env.TOKEN,'${env:MY_TOKEN}');
   const info=variableInfo(entry,{});
-  assert.equal(info[0].state,'missing');assert.deepEqual(info[0].missing,['env:MY_TOKEN']);
+  // 报名字而不是 `env:MY_TOKEN`：和「变量引用」检查里的缺失名单保持同一个写法。
+  assert.equal(info[0].state,'missing');assert.deepEqual(info[0].missing,['MY_TOKEN']);
   assert.equal(info[1].state,'credential');assert.ok(!JSON.stringify(info).includes('private'));
   assert.equal(redact({headers:{Authorization:'Bearer ${credential:AUTH}'}}).headers.Authorization,'Bearer ${credential:AUTH}');
 });
