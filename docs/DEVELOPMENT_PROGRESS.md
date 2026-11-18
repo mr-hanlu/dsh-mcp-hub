@@ -59,7 +59,7 @@ CI：`.github/workflows/ci.yml` 分两个作业。`checks` 在 `ubuntu-latest` �
 
 页面层同时补了两条分支：连接测试进行中原本把「测试全部」按钮整个撤掉，进度文案是死代码；现在按钮保留并显示「测试中 n/m」，旁边是「取消测试」。`test:ui` 增加测试进度/取消、重名跳过、连接失败原因、缺失环境变量、保存后关闭、编辑已有服务六步，失败写全页截图；`tests/manual/echo-server.mjs` 支持 `MCP_ECHO_DELAY` 放慢握手，保证取消有可点的窗口。
 
-验证：`npm test`、`npm run check`、`npm run build`、`npm run test:e2e`、`npm run test:ui`（14 步）全部通过。
+验证：`npm test`、`npm run check`、`npm run build`、`npm run test:e2e`、`npm run test:ui`（15 步）全部通过。
 
 ## 本轮（2026-11-18）：密钥统一写入 DSH 凭证服务
 

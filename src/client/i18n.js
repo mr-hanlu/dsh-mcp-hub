@@ -446,6 +446,7 @@ const DYNAMIC = [
   [/^第 (\d+)\/(\S+) 次重试$/, 'Attempt $1/$2'],
   [/^状态未知（(.+)）$/, 'Unknown status ($1)'],
   [/^已添加 (\d+) 个服务$/, 'Added $1 services'],
+  [/^已添加 (\d+) 个服务（密钥已写入 DSH 凭证）$/, 'Added $1 services (secrets stored as DSH credentials)'],
   [/^已撤销 (\d+) 个服务$/, 'Removed $1 services'],
   [/^已撤销 (\d+) 个；(\d+) 个已修改，未撤销$/, 'Removed $1; $2 modified and kept'],
   [/^已请求重连 (\d+) 个服务$/, 'Reconnect requested for $1 services'],

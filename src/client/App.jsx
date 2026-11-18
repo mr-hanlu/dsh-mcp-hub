@@ -988,10 +988,10 @@ export function App({ request = apiRequest, preview = false, locale }) {
     return () => clearTimeout(timer);
   }, [notice, noticePaused]);
   function notify(text, tone = 'good') { setNoticePaused(false); setNotice({text,tone,id:Date.now()}); }
-  function showUndo(batchId, names) {
+  function showUndo(batchId, names, note = '') {
     if (!batchId || !names.length) return;
     clearTimeout(undoTimer.current);
-    setUndo({ batchId, names });
+    setUndo({ batchId, names, note });
     undoTimer.current = setTimeout(() => setUndo(null), 20000);
   }
   async function undoImport() {
@@ -1132,7 +1132,7 @@ export function App({ request = apiRequest, preview = false, locale }) {
     <p className="hub-description">连接、管理你的 MCP 服务，把常用工具带到 DSH。</p>
     <nav className="hub-main-tabs" aria-label="MCP Hub 页面"><button type="button" aria-current={tab === 'installed' ? 'page' : undefined} className={tab === 'installed' ? 'active' : ''} onClick={() => setTab('installed')}><Icon name="box"/>已添加 <small>{servers.length}</small></button><button type="button" aria-current={tab === 'import' ? 'page' : undefined} className={tab === 'import' ? 'active' : ''} onClick={() => setTab('import')}><Icon name="import"/>本地导入</button><button type="button" aria-current={tab === 'catalog' ? 'page' : undefined} className={tab === 'catalog' ? 'active' : ''} onClick={() => setTab('catalog')}><Icon name="search"/>在线搜索</button></nav>
     {(error || loadError) && <div className="hub-banner bad" role="alert"><Icon name="info"/><span>{error || loadError}</span><button className="hub-text-button" onClick={() => { setError(''); refresh().catch(() => {}); }}>重试</button></div>}
-    {undo && <div className="hub-undo" role="status"><span>已添加 {undo.names.length} 个服务</span><button type="button" className="hub-text-button" disabled={!!busy} onClick={undoImport}>撤销</button><IconButton icon="close" label="关闭撤销提示" onClick={() => setUndo(null)}/></div>}
+    {undo && <div className="hub-undo" role="status"><span>已添加 {undo.names.length} 个服务{undo.note}</span><button type="button" className="hub-text-button" disabled={!!busy} onClick={undoImport}>撤销</button><IconButton icon="close" label="关闭撤销提示" onClick={() => setUndo(null)}/></div>}
     {notice && <div className={'hub-toast ' + notice.tone} role="status" onMouseEnter={()=>setNoticePaused(true)} onMouseLeave={()=>setNoticePaused(false)} onFocus={()=>setNoticePaused(true)} onBlur={()=>setNoticePaused(false)}><Icon name={notice.tone === 'good' ? 'check' : 'info'}/><span>{notice.text}</span><IconButton icon="close" label="关闭通知" onClick={() => setNotice(null)}/></div>}
     <Boundary>
     {tab === 'catalog' ? <CatalogPanel request={request} onInstall={(install, option) => setDraft({ name: install.name, entry: option.entry, initialMode: 'form', source: '官方 MCP Registry', sourcePath: install.registryName, jsonText: JSON.stringify({ mcpServers: { [install.name]: option.entry } }, null, 2), jsonFormat: 'json' })}/> : tab === 'installed' ? <>
@@ -1153,7 +1153,7 @@ export function App({ request = apiRequest, preview = false, locale }) {
       const secrets = result.credentials?.stored?.length ? '（密钥已写入 DSH 凭证）' : '';
       if (batch) {
         setDraft(null);
-        showUndo(result.batchId, result.imported ?? names);
+        showUndo(result.batchId, result.imported ?? names, secrets);
       } else if (result.ok || result.draft) {
         setDraft(null);
         notify(result.draft ? label + ' 已保存，保持停用' + secrets : verifying ? label + ' 已保存，正在验证连接' + secrets : label + ' 已保存' + secrets, result.draft ? 'muted' : 'good');

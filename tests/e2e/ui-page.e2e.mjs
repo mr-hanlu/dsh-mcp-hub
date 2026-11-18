@@ -13,6 +13,7 @@
  *   - 环境变量引用缺失时指出缺哪一项
  *   - 编辑已有服务后保存，编辑器关闭、行内重新验证
  *   - 保存成功后编辑器自动关闭
+ *   - 带明文 token 的服务保存后提示「密钥已写入 DSH 凭证」
  * 失败时会往 tests/e2e/artifacts/ 留一张全页截图。
  *
  * 用法：npm run test:ui
@@ -206,6 +207,21 @@ async function main() {
     assert.equal(editorAfterEdit, false, '编辑保存后编辑器没有关闭');
     await waitForText(page, /uitest1.*已连接/, { label: '编辑后重新连接', timeoutMs: 60000 });
     step('edit-save', { ok: true });
+
+    // 密钥写入凭证服务：带明文 token 保存后，页面提示「密钥已写入 DSH 凭证」。
+    assert.equal(await clickLabel(page, '添加 MCP'), true, '凭据化步骤找不到「添加 MCP」');
+    await waitForText(page, 'JSON 编辑', { label: '凭据化编辑器' });
+    await pasteJson(page, JSON.stringify({ mcpServers: { uiauth: { command: process.execPath, args: [fixture], cwd: repoRoot, env: { MCP_E2E_TOKEN: 'sk-live-e2e-0123456789abcdef' } } } }, null, 2));
+    assert.equal(await clickLabel(page, '测试全部'), true, '凭据化步骤找不到「测试全部」');
+    await waitForText(page, /已测试 1\/1/, { label: '凭据化测试' });
+    if (!(await clickLabel(page, /^添加 1 个$/))) throw new Error('凭据化步骤找不到「添加 1 个」按钮');
+    await waitForText(page, /已添加 1 个服务（密钥已写入 DSH 凭证）/, { label: '凭证写入提示', timeoutMs: 30000 });
+    await waitForText(page, /uiauth.*已连接/, { label: '凭据化行状态', timeoutMs: 60000 });
+    step('credential-save', { ok: true });
+    assert.equal(await clickLabel(page, '删除 uiauth'), true, '凭据化步骤找不到「删除 uiauth」');
+    await waitForText(page, '删除 MCP 服务', { label: '凭据化删除弹窗' });
+    assert.equal(await clickLabel(page, '删除'), true);
+    await waitForText(page, '已添加 3', { label: '凭据化行删除', timeoutMs: 30000 });
 
     assert.equal(await clickLabel(page, '删除 uitest1'), true);
     await waitForText(page, '删除 MCP 服务', { label: '删除弹窗' });
