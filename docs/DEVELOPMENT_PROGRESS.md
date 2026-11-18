@@ -2,7 +2,7 @@
 
 更新日期：2026-11-18（Asia/Shanghai）
 
-> 收工状态：单测 138 项、`check`、`build`、`test:e2e`（stdio + 启动/重连边界 + HTTP + 凭证 + 删除后同名重加）、`test:ui`（页面主流程，21 步）、`test:layout`（浅色/深色/窄窗口）全部通过；桌面实例已 link 安装并完成第一轮验收。CI 基础流水线与端到端作业已接入；启停后的验证结论已能刷新；密钥已统一写入 DSH 凭证服务，配置只保留引用；删除后清理期的同名重加不再误报重名；页面剩余分支（表单补全变量、重命名引用行、失败后重测）已补齐；来源兼容矩阵用真实 Claude Code / Codex 样本建立；桌面人工项整理成清单。下一步是清单里的桌面验收与其余来源的真实文件，见 [后续任务](NEXT_TASKS.md#下一次开发的建议顺序)。
+> 收工状态：单测 139 项、`check`、`build`、`test:e2e`（stdio + 启动/重连边界 + HTTP + 凭证 + 删除后同名重加）、`test:simulated`（假 HOME + 九种客户端写法 + 各种密钥）、`test:ui`（页面主流程，23 步）、`test:layout`（浅色/深色/窄窗口）全部通过；桌面实例已 link 安装并完成第一轮验收。CI 基础流水线与端到端作业已接入；启停后的验证结论已能刷新；密钥已统一写入 DSH 凭证服务，配置只保留引用；删除后清理期的同名重加不再误报重名；页面剩余分支（表单补全变量、重命名引用行、失败后重测）已补齐；来源兼容矩阵用真实 Claude Code / Codex 样本建立；模拟来源功能验收覆盖了本机没装的客户端；桌面人工项整理成清单。下一步是清单里的桌面验收与其余来源的真实文件，见 [后续任务](NEXT_TASKS.md#下一次开发的建议顺序)。
 
 ## 当前版本与状态
 
@@ -11,6 +11,22 @@
 - 尚未发布到 npm、插件市场或创建正式发布标签；本次只进行本地 Git 提交，push 由仓库维护者执行。
 - 功能重点为「已添加」「本地导入」和「在线搜索」；在线搜索只接官方 MCP Registry，选择后预填编辑页，不静默安装。
 - 桌面 `desktop` profile 已用 link 方式安装：`~/.dsh/profiles/desktop/package.json` 里 `dsh-mcp-hub` 指向本仓库，bundles 也含它；第一轮验收见下文。尚未系统验收的是主题与窄窗口、重启 DSH 后的恢复、凭证缺失与凭证服务不可用这些人工项。
+
+## 本轮（2026-11-18）：用假 HOME 跑通的「各客户端 + 各种密钥」功能验收
+
+维护者的机器上只有少量 MCP 服务和部分客户端，真实样本有限。这一轮补的是**功能**：造一台「装了九种客户端、各种密钥写法都有」的假机器，用真实 Host 跑完整链路，而不是只验证解析。
+
+| 位置 | 处理 |
+| --- | --- |
+| `tests/e2e/support/simulated-home.mjs`（新增） | 按各应用真实路径生成配置：Claude Code（项目级 + 顶层）、Claude Desktop（明文密钥 / 停用项）、Codex（Bearer 环境变量 / `env_http_headers` / `env_vars` / 相对命令）、OpenCode（JSONC + 单花括号引用）、Gemini（`httpUrl` + 单位不明的 `timeout`/`trust`）、VS Code（`envFile` + 缺变量）、Copilot CLI、Windsurf、Cursor（明文密钥）。所有 stdio 条目都指向受控 echo 服务，导入后能真连上。 |
+| `tests/e2e/simulated-sources.e2e.mjs`（新增，`npm run test:simulated`） | 把假 HOME 交给真实 Host（`HOME=<假目录>`，`DSH_HOME` 仍是临时 profile），依次验证：九个来源与 15 个候选被扫描到；明文密钥与 `${env:X}` / `${X}` 都解析成真实值写入 DSH 凭证，配置只剩 `${credential:MCPHUB_…}`，列表接口不泄漏明文，`reveal` 能读回；Codex 的 Bearer 与 `env_http_headers` 落成引用、`env_vars` 变成 `MCPHUB_SHARED_TOKEN_2`（已被别的服务占用，按共享规则 fork）而普通变量 `SIM_MODE` 保持明文；跨来源的同一连接被认成重复；缺变量与相对命令被拒且零写入；其余五个来源导入并连上；导出默认不含密钥、勾选后内联；九个来源文件哈希前后一致（没有被写回）；删除后提示已无引用的凭证。 |
+| `src/host/service.js`：重复识别 | 真实缺陷：同一个服务在一个应用里写成 `${env:DOCS_TOKEN}`、在另一个应用里已经存成 `${credential:MCPHUB_DOCS_TOKEN}` 时，指纹按模板文本算，判成两个服务，导入列表不会显示「已添加」。现在按**解析后的连接身份**比较（凭证与 `env:` 引用都解析成真实值再哈希，解析不到就保留模板，宁可不合并），明文、模板、已存凭证三种写法都能对上，token 不同仍算两个连接。 |
+| `src/client/App.jsx` | 来源分组的标题按钮补 `aria-label={source.name}`、候选的「添加」按钮补 `aria-label={'添加 ' + name}`：既方便读屏，也让页面验收能精确点到某一条候选。 |
+| `tests/e2e/ui-page.e2e.mjs` | 页面层也改用假 HOME（23 步）：`本地导入` 页签要显示各应用分组与计数（Claude Desktop「2 项配置」），并能直接从候选导入一条带明文密钥的服务，提示「密钥已写入 DSH 凭证」且行内连上。 |
+| `tests/service.test.mjs` | 新增 1 项：同一 token 的三种写法（`${env:…}`、已存凭证、明文）都判为同一连接，换 token 后不再判重复。 |
+| `.github/workflows/ci.yml` | 自托管 runner 上增加 `test:simulated`，与另外两条端到端、布局验收串行跑。 |
+
+验证：`npm test` 139 项、`npm run check`、`npm run build`、`npm run test:e2e`（26 步）、`npm run test:simulated`（16 步）、`npm run test:ui`（23 步）、`npm run test:layout`（4 张截图）全部通过。
 
 ## 本轮（2026-11-18）：来源兼容矩阵与布局验收
 
@@ -286,11 +302,12 @@ CI：`.github/workflows/ci.yml` 分两个作业。`checks` 在 `ubuntu-latest` �
 
 | 验证方式 | 结果与覆盖范围 |
 | --- | --- |
-| `npm test` | 138 项通过：格式解析、高德配置回归、env 缺失与凭据判定、脱敏、重复判断、版本冲突、旧连接误判、工具注册等待、真实非 MCP 程序拒绝、密钥写入凭证服务与名称生成/冲突/独占轮换、reveal 与导出解析、硬约束与错误 code、项目级导入、坏条目容错、验证结果持久化、启停后重新验证、推送通道、复诊、备份占位符、删除后清理期的同名重加与重试（`NAME_CLEANING`）、首次连接的「可能在下载依赖」提示、缺失变量名不带 `env:` 前缀、来源兼容矩阵（真实 Claude Code / Codex 样本、空服务列表、`env_vars` 转发、相对命令与空 PATH）等 |
+| `npm test` | 139 项通过：格式解析、高德配置回归、env 缺失与凭据判定、脱敏、重复判断、版本冲突、旧连接误判、工具注册等待、真实非 MCP 程序拒绝、密钥写入凭证服务与名称生成/冲突/独占轮换、reveal 与导出解析、硬约束与错误 code、项目级导入、坏条目容错、验证结果持久化、启停后重新验证、推送通道、复诊、备份占位符、删除后清理期的同名重加与重试（`NAME_CLEANING`）、首次连接的「可能在下载依赖」提示、缺失变量名不带 `env:` 前缀、来源兼容矩阵（真实 Claude Code / Codex 样本、空服务列表、`env_vars` 转发、相对命令与空 PATH）、跨来源重复识别等 |
 | `npm run check` | Host JavaScript 语法检查通过 |
 | `npm run build` | 插件浏览器模块及独立预览构建通过 |
 | `npm run test:e2e` | 通过：临时 `DSH_HOME` + `web` 模板 profile，真实 `/api/dsh-mcp-hub/*` 路由跑完 stdio 全链路（列表、扫描、测试、添加、验证、工具、启停、重启、删除）、启动/重连边界（2.5 秒慢握手、2 秒慢工具发现、握手后退出进入重连退避）与 Streamable HTTP 全链路（静态 Bearer、凭证模板、凭证轮换重连、错误 token 判为需要认证）；删除后等官方清理行消失、删除后立刻同名重加（运行中的同名仍判 `NAME_TAKEN`）；不写用户 profile |
-| `npm run test:ui` | 通过（21 步）：无头 Chrome 在临时 profile 上点完设置页 —— 导航到 MCP Hub、空状态、导入页签、JSON 粘贴逐行测试、一次添加两个并显示已连接、重名跳过、测试进度与取消、连接失败原因、缺失环境变量、编辑已有服务、保存后关闭、删除弹窗与删后空状态、页签切换草稿保留、表单里缺引用时「直接填写」补全并重测通过、重命名凭证引用行保持引用、测试失败后改配置重测通过；失败留截图 |
+| `npm run test:ui` | 通过（23 步）：无头 Chrome 在临时 profile 上点完设置页 —— 导航到 MCP Hub、空状态、导入页签、JSON 粘贴逐行测试、一次添加两个并显示已连接、重名跳过、测试进度与取消、连接失败原因、缺失环境变量、编辑已有服务、保存后关闭、删除弹窗与删后空状态、页签切换草稿保留、表单里缺引用时「直接填写」补全并重测通过、重命名凭证引用行保持引用、测试失败后改配置重测通过、假 HOME 的来源分组与从候选导入带密钥的服务；失败留截图 |
+| `npm run test:simulated` | 通过：假 HOME 里九个客户端的配置（明文 / `${env:X}` / `${X}` / `{env:X}` / Bearer 环境变量 / env 请求头 / env_vars / 停用项 / 未知字段 / 缺变量 / 相对命令）走真实 Host 扫描并逐个导入：密钥写入 DSH 凭证、配置只留引用、真连接注册工具、跨来源重复识别、导出与来源文件不被改写 |
 | `npm run test:layout` | 通过：真实插件页面在临时 profile 里截浅色 / 深色 / 700px 窄窗口 / 窄窗口编辑窗口，断言无横向溢出、编辑窗口不超出视口、深浅色底色不同（覆盖插件回退配色；DSH 主题变量仍需桌面人工看） |
 | `node scripts/assert-pack.mjs` | 通过：`npm pack --dry-run --json --ignore-scripts` 的清单含 24 个文件，Host / 共享模块 / 浏览器模块 / 样式 / patch / locale / icon / 文档 / LICENSE 齐全，复审报告未进包 |
 | CI | 已接入 `.github/workflows/ci.yml`：基础作业公开 runner 可跑；端到端作业需自托管 runner（`DSH_E2E_RUNNER=true` + `dsh` 标签），CI 内 `DSH_E2E_REQUIRED=1` 禁止 SKIP |

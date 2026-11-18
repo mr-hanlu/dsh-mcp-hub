@@ -125,9 +125,11 @@ DSH_TEST_MODULES=/tmp/dsh-mcp-hub-smoke npm run test:integration
 5. **真实 profile 验收**（唯一能说明"用户实际看到什么"的方式）：按上面的**方式 A** 装进桌面 profile，检查设置页、样式、主题、重启恢复、凭证引用，以及和官方 Manager 已有服务、插件注册服务、继承配置的边界。CLI profile 可以用 `--dump-config` 先确认层组合，再启动看到实际页面。桌面页面的 origin 是 `dsh-app://app`，没有可复用的 HTTP 地址；需要脚本化时用第 2 条的临时 profile，而不是桌面实例。
 6. **预览页（仅开发辅助）**：`npm run dev` 后访问 <http://127.0.0.1:4173>。初始列表是示例数据；点「测试连接」会在本机真实启动 MCP 并关闭，不写入 DSH。它没有真实的 DSH 凭证服务、没有安装后的设置页环境，因此不能作为验收依据。官方文档同样不建议用自建预览页替代安装后的验证。
 
-7. **布局验收**：`npm run test:layout` 在同一套临时 profile 上截图并断言没有横向溢出——浅色、深色、700px 窄窗口、窄窗口下的编辑窗口，产物写到 `tests/e2e/artifacts/layout-*.png`。它覆盖插件自带的深浅色回退与布局；桌面应用注入的 `--dsw-alias-*` 主题变量仍需人工看一眼（清单见 [桌面实例验收](docs/DESKTOP_ACCEPTANCE.md)）。
+7. **模拟来源功能验收**：`npm run test:simulated` 造一个「装了各种客户端」的假 `HOME`（Claude Code / Claude Desktop / Codex / Gemini / VS Code / Copilot / Windsurf / Cursor / OpenCode），条目里同时放明文密钥、`${env:X}`、`${X}`、`{env:X}`、Codex 的 `bearer_token_env_var` / `env_http_headers` / `env_vars`、停用项、未知字段和一个环境里没有值的引用；然后走真实 Host：扫描 → 逐个导入 → 密钥写入 DSH 凭证（配置只留 `${credential:…}`）→ 真连接并注册工具 → 跨来源重复识别 → 缺变量与相对命令被拒绝 → 导出（含/不含密钥）→ 来源文件没有被写回。
 
-8. **持续集成**：`.github/workflows/ci.yml` 在 push 到 `main` 和每次 PR 上跑三层里能公开复现的部分——`npm ci` → `npm test` → `npm run check` → `npm run build` → `scripts/assert-pack.mjs` 校验打包清单（必需文件齐全、复审报告不进包）。端到端作业需要装了 DSH 的机器，默认跳过；要打开就在仓库 Settings → Variables 设 `DSH_E2E_RUNNER=true`，再挂一台带 `dsh` 标签的自托管 runner：`DSH_BIN` 可指 launcher，页面层用 `DSH_E2E_CHROME_PATH` 指 Chrome，两条端到端与布局验收在 runner 上串行跑（都占 `127.0.0.1:3080`）。CI 里设了 `DSH_E2E_REQUIRED=1`，缺 dsh / Chrome 时失败而不是 SKIP；`test:ui` 失败时把 `tests/e2e/artifacts/` 里的全页截图作为 `ui-failure` artifact 上传。
+8. **布局验收**：`npm run test:layout` 在同一套临时 profile 上截图并断言没有横向溢出——浅色、深色、700px 窄窗口、窄窗口下的编辑窗口，产物写到 `tests/e2e/artifacts/layout-*.png`。它覆盖插件自带的深浅色回退与布局；桌面应用注入的 `--dsw-alias-*` 主题变量仍需人工看一眼（清单见 [桌面实例验收](docs/DESKTOP_ACCEPTANCE.md)）。
+
+9. **持续集成**：`.github/workflows/ci.yml` 在 push 到 `main` 和每次 PR 上跑三层里能公开复现的部分——`npm ci` → `npm test` → `npm run check` → `npm run build` → `scripts/assert-pack.mjs` 校验打包清单（必需文件齐全、复审报告不进包）。端到端作业需要装了 DSH 的机器，默认跳过；要打开就在仓库 Settings → Variables 设 `DSH_E2E_RUNNER=true`，再挂一台带 `dsh` 标签的自托管 runner：`DSH_BIN` 可指 launcher，页面层用 `DSH_E2E_CHROME_PATH` 指 Chrome，四条端到端脚本（接口层、页面层、模拟来源、布局）在 runner 上串行跑（都占 `127.0.0.1:3080`）。CI 里设了 `DSH_E2E_REQUIRED=1`，缺 dsh / Chrome 时失败而不是 SKIP；`test:ui` 失败时把 `tests/e2e/artifacts/` 里的全页截图作为 `ui-failure` artifact 上传。
 
 ## 导入与验证
 
@@ -195,7 +197,7 @@ npm run check
 npm run build
 ```
 
-单元测试覆盖配置解析、脱敏往返、环境变量与凭据判定、项目级导入、冲突、失败状态、Schema 默认值、旧连接误判、工具注册等待、坏条目容错、验证结果持久化、启停后重新验证、首次连接预算、推送通道、复诊、删除后清理期的同名重加（`NAME_CLEANING` 与重试）、来源兼容矩阵（真实 Claude Code / Codex 样本、`env_vars` 转发、空服务列表、相对命令与空 PATH）和官方 Fetch 路由注册（当前 138 项）。
+单元测试覆盖配置解析、脱敏往返、环境变量与凭据判定、项目级导入、冲突、失败状态、Schema 默认值、旧连接误判、工具注册等待、坏条目容错、验证结果持久化、启停后重新验证、首次连接预算、推送通道、复诊、删除后清理期的同名重加（`NAME_CLEANING` 与重试）、来源兼容矩阵（真实 Claude Code / Codex 样本、`env_vars` 转发、空服务列表、相对命令与空 PATH）、跨来源重复识别（按解析后的连接身份比较）和官方 Fetch 路由注册（当前 139 项）。
 
 真实集成测试在临时 profile 中启动受控 MCP 子进程，验证官方 Settings 持久化、连接、工具注册、重复检测和停用。依赖装在独立目录、不随插件发布，准备方式和运行命令见上文[验证方式](#验证方式)第 2 条。
 
