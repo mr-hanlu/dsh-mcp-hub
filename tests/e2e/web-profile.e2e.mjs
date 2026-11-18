@@ -140,6 +140,41 @@ async function main() {
     assert.equal(restarted.status, 200, '重启被拒绝：' + JSON.stringify(restarted.body));
     step('restart', { status: restarted.status });
 
+    // 正在运行的服务仍然是重名：放宽的只能是「已删除、清理中」那一行。
+    const duplicate = await call('/mutate', { action: 'save', revision: (await servers()).revision, name: 'hubaccept', entry: stdioEntry });
+    assert.equal(duplicate.body?.code, 'NAME_TAKEN', '运行中的同名服务没有被判为重名：' + JSON.stringify(duplicate.body));
+    step('duplicate-guard', { code: duplicate.body.code });
+
+    // 删除接口返回 200 之后，官方 Manager 仍会保留一段「已删除，清理中」的实例
+    // （实测重启后立即删除约 200ms）。名字在配置里已经空出来，所以紧接着用同一个
+    // 名字重新添加不该被当成「重名」：Host 用 NAME_CLEANING 区分，调用方短暂重试即可。
+    revision = (await servers()).revision;
+    const removedFirst = await call('/mutate', { action: 'remove', revision, name: 'hubaccept' });
+    assert.equal(removedFirst.body?.ok, true, '删除失败：' + JSON.stringify(removedFirst.body));
+    const readd = { attempts: 0, cleaning: 0, cleanupRows: 0, ms: 0 };
+    const readdStart = Date.now();
+    for (;;) {
+      const current = await servers();
+      if (current.servers.some(row => row.name === 'hubaccept' && row.managed === 'cleanup')) readd.cleanupRows += 1;
+      const reply = await call('/mutate', { action: 'save', revision: current.revision, name: 'hubaccept', entry: stdioEntry });
+      readd.attempts += 1;
+      if (reply.body?.saved) { readd.ms = Date.now() - readdStart; break; }
+      const code = reply.body?.code;
+      if (code === 'NAME_CLEANING' || code === 'REVISION_CONFLICT') {
+        if (code === 'NAME_CLEANING') {
+          readd.cleaning += 1;
+          assert.match(String(reply.body?.message), /清理中/, '清理期的提示应说明正在清理上一个连接');
+        }
+        if (readd.attempts >= 40) assert.fail('删除后同名重新添加一直失败：' + JSON.stringify(reply.body));
+        await sleep(150);
+        continue;
+      }
+      assert.fail('删除后同名重新添加被拒：' + JSON.stringify(reply.body));
+    }
+    step('readd-while-cleaning', readd);
+    const readded = await waitState('hubaccept', row => row?.state === 'connected', 'readd-connect', 60000);
+    step('readd-connect', { state: readded.row.state, ms: readded.ms });
+
     await removeRow('hubaccept');
     const afterStdio = await servers();
     assert.equal(afterStdio.servers.length, baseline.servers.length, '删除后仍在列表里');

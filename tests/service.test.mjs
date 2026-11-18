@@ -134,6 +134,31 @@ test('retained cleanup rows are reported as cleanup rather than plugin servers',
   assert.equal(row.status.closeConfirmed,false);assert.equal(row.status.cleanupError,'busy');
   assert.equal(row.source.app,'已删除，清理中');
 });
+test('re-adding a name whose old instance is still cleaning up reports cleaning, not duplication',async()=>{
+  // 删除后官方会保留一行 configured=false 的实例：名字已从配置空出，但进程还没退出。
+  const extraRows=[{name:'demo',configured:false,status:{state:'connecting',reason:'cleanup',result:{closeConfirmed:false,cleanupError:'tool cleanup timed out'}}}];
+  const {service,form}=fixture({extraRows});
+  await assert.rejects(service.mutate(body),error=>{
+    assert.equal(error.code,'NAME_CLEANING');
+    assert.match(error.message,/清理中/);
+    assert.match(error.message,/tool cleanup timed out/);
+    return true;
+  });
+  assert.equal(Object.hasOwn(form.value.servers,'demo'),false,'清理期间不该写入同名配置');
+  extraRows.length=0;
+  const saved=await service.mutate(body);
+  assert.equal(saved.saved,true,'清理行消失后同一个名字应能添加');
+  service.cancelVerification('demo');
+});
+test('a live row from another plugin still counts as a taken name',async()=>{
+  const {service}=fixture({extraRows:[{name:'demo',configured:true,status:{state:'connected'}}]});
+  await assert.rejects(service.mutate(body),error=>error.code==='NAME_TAKEN');
+});
+test('batch import reports a cleaning name instead of silently skipping it',async()=>{
+  const {service,form}=fixture({extraRows:[{name:'demo',configured:false,status:{state:'connecting',reason:'cleanup'}}]});
+  await assert.rejects(service.mutate({action:'import',revision:1,entries:[{name:'demo',entry:body.entry},{name:'other',entry:body.entry}]}),error=>error.code==='NAME_CLEANING');
+  assert.deepEqual(Object.keys(form.value.servers),[],'整批都不该写入');
+});
 test('retry details from the official status reach the client',async()=>{
   const {service}=fixture({servers:{demo:body.entry},status:{state:'reconnecting',attempt:3,maxAttempts:10,nextRetryAtMs:1234,lastError:'boom'}});
   const [row]=(await service.list()).servers;

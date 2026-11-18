@@ -4,6 +4,7 @@ import React, { Component, useEffect, useRef, useState } from 'react';
 import { applyEdits, modify } from 'jsonc-parser';
 import { parseEditorDocument } from '../shared/mcp-config.js';
 import { isSecretKey } from '../shared/display.js';
+import { retryWhileCleaning, takenNames } from '../shared/servers.js';
 import { h, setLocale } from './i18n.js';
 
 const MASK = '••••••••';
@@ -539,7 +540,7 @@ function Editor({ draft, request, revision, reloadRevision, onClose, onSaved, ex
         acceptUnsupported: formAccept,
         mode: original && formEntry.enabled === false ? 'draft' : undefined,
       };
-      const result = await request(action === 'check' ? '/test' : '/mutate', body);
+      const result = await retryWhileCleaning(() => request(action === 'check' ? '/test' : '/mutate', body));
       if (result.entry) setWillWrite(result.entry);
       setFormChecks(result.checks ?? []);
       setFormVariables(result.variables ?? []);
@@ -569,11 +570,11 @@ function Editor({ draft, request, revision, reloadRevision, onClose, onSaved, ex
       const row = jsonEditRow;
       setBusy(true); setBusyAction('save');
       try {
-        const result = await request('/mutate', {
+        const result = await retryWhileCleaning(() => request('/mutate', {
           action: 'save', name: row.name.trim(), entry: row.entry, originalName: original,
           revision: currentRevision.current, acceptUnsupported: Boolean(accepted[rowKey(row)]),
           mode: row.entry.enabled === false ? 'draft' : undefined,
-        });
+        }));
         if (result.entry) setWillWrite(result.entry);
         setJsonChecks(result.checks ?? []); setWarnings(result.warnings ?? []);
         if (result.saved) {
@@ -602,7 +603,7 @@ function Editor({ draft, request, revision, reloadRevision, onClose, onSaved, ex
     }));
     setBusy(true); setBusyAction('import');
     try {
-      const result = await request('/mutate', { action: 'import', revision: currentRevision.current, entries });
+      const result = await retryWhileCleaning(() => request('/mutate', { action: 'import', revision: currentRevision.current, entries }));
       setJsonChecks(result.checks ?? []); setWarnings(result.warnings ?? []);
       if (result.ok && result.saved) {
         setSaved(true);
@@ -1248,7 +1249,7 @@ export function App({ request = apiRequest, preview = false, locale }) {
     </Boundary>
     {confirm && <DeleteDialog server={confirm} busy={!!busy} error={deleteError} onCancel={()=>setConfirm(null)} onDelete={()=>action('remove',confirm,true)}/>}
     {exportOpen && <ExportDialog busy={exportBusy} error={exportError} onCancel={()=>{ if(!exportBusy) setExportOpen(false); }} onExport={exportConfig}/>}
-    {draft && <Editor draft={draft} existing={servers.map(server => server.name)} revision={data?.revision} request={request} reloadRevision={async () => (await refresh(true)).revision} onClose={() => setDraft(null)} onSaved={async ({result,names = [],batch}) => {
+    {draft && <Editor draft={draft} existing={takenNames(servers)} revision={data?.revision} request={request} reloadRevision={async () => (await refresh(true)).revision} onClose={() => setDraft(null)} onSaved={async ({result,names = [],batch}) => {
       const next = await refresh(true);
       const count = names.length;
       const label = count > 1 ? `${count} 个 MCP 服务` : (names[0] ?? '服务');

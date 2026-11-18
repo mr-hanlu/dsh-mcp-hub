@@ -323,6 +323,12 @@ export class HubService {
       if (signal?.aborted) return snapshot;
     }
   }
+  /** 名字被「已删除、清理中」的实例占着时的说明：附上官方给出的清理失败原因。 */
+  cleaningMessage(live) {
+    const reason = typeof live?.status?.result?.cleanupError === 'string' && live.status.result.cleanupError ? live.status.result.cleanupError : '';
+    return '该名称正在清理上一个连接（已删除，清理中）' + (reason ? '：' + reason : '')
+      + '；稍后重试即可，若一直不消失需要重启 DSH';
+  }
   safeError(error, entry) {
     let text = String(error?.message ?? error);
     const secrets = [];
@@ -536,8 +542,14 @@ export class HubService {
         if (body.originalName && !Object.hasOwn(entries, body.originalName)) fail('CANDIDATE_STALE', '服务已被删除，请刷新后重试');
         if (renamed && Object.hasOwn(form.base?.servers ?? {}, body.originalName)) fail('INHERITED_ROW', '继承配置中的服务不能改名，只能停用');
         const runtime = this.ctx.mcpManager.list();
-        const conflict = Object.hasOwn(entries, body.name) || runtime.some(row => row.name === body.name);
+        const live = runtime.find(row => row.name === body.name);
+        // 刚删除的服务会被官方保留成一行 `configured === false` 的「清理中」实例：
+        // 名字在配置里已经空出来，但旧进程还没退出，此刻写入会与它抢同一个名字。
+        // 那不是重名，界面上重试即可，所以要给出能和 NAME_TAKEN 区分的结论。
+        const cleaning = live?.configured === false;
+        const conflict = Object.hasOwn(entries, body.name) || (Boolean(live) && !cleaning);
         if (renamed ? conflict : !body.originalName && conflict) fail('NAME_TAKEN', '已有同名服务器，请修改名称');
+        if (!Object.hasOwn(entries, body.name) && cleaning) fail('NAME_CLEANING', this.cleaningMessage(live));
         const { entry, candidate } = this.draft(body, entries);
         // Secrets are moved into the credential store first, but only written once
         // validation passes; a failed write rolls the new values back.
@@ -634,10 +646,14 @@ export class HubService {
       if (!item || typeof item !== 'object' || typeof item.name !== 'string' || !item.name) fail('REQUEST_INVALID', '批量配置缺少服务名称');
       if (seen.has(item.name)) fail('NAME_TAKEN', `批量配置中有重复的服务名：${item.name}`);
       seen.add(item.name);
-      if (Object.hasOwn(entries, item.name) || Object.hasOwn(base, item.name) || runtime.some(row => row.name === item.name)) {
+      const live = runtime.find(row => row.name === item.name);
+      if (Object.hasOwn(entries, item.name) || Object.hasOwn(base, item.name) || (live && live.configured !== false)) {
         skipped.push({ name: item.name, reason: '已存在' });
         continue;
       }
+      // 清理中的同名实例不是「已存在」：跳过会让人以为添加了，写入又会和旧进程抢名字，
+      // 所以整批拒绝，由调用方稍后重试。
+      if (live) fail('NAME_CLEANING', this.cleaningMessage(live));
       const { entry, candidate } = this.draft({ entry: item.entry, name: item.name, candidateId: item.candidateId }, entries);
       if (candidate?.issues?.length && !item.acceptUnsupported) fail('CONFIG_INVALID', `请先确认「${item.name}」中的未迁移字段`);
       const planned = await this.planSecrets(entry, { name: item.name }, form, entries, batchOwners);
