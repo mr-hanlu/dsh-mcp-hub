@@ -11,6 +11,7 @@
  *   - 已存在的同名服务在粘贴后标为跳过，只测试、只添加新服务
  *   - 连接测试失败时行内给出失败状态，且不允许添加
  *   - 环境变量引用缺失时指出缺哪一项
+ *   - 编辑已有服务后保存，编辑器关闭、行内重新验证
  *   - 保存成功后编辑器自动关闭
  * 失败时会往 tests/e2e/artifacts/ 留一张全页截图。
  *
@@ -193,6 +194,18 @@ async function main() {
     const editorOpen = await page.evaluate(() => Boolean(document.getElementById('hub-editor-title')));
     assert.equal(editorOpen, false, '保存成功后编辑器没有关闭');
     step('save-closed', { ok: true });
+
+    // 编辑已有服务：改配置 → 保存 → 编辑器关闭、行内重新验证。
+    assert.equal(await clickLabel(page, '编辑 uitest1'), true, '找不到「编辑 uitest1」');
+    await waitForText(page, '编辑 MCP 服务', { label: '编辑已有服务' });
+    assert.equal(await clickLabel(page, 'JSON 编辑'), true, '编辑弹窗里找不到「JSON 编辑」');
+    await pasteJson(page, JSON.stringify({ mcpServers: { uitest1: { command: process.execPath, args: [fixture], cwd: repoRoot, env: { EDIT_MARK: '1' } } } }, null, 2));
+    assert.equal(await clickLabel(page, '保存'), true, '找不到「保存」');
+    await waitForText(page, 'uitest1 已保存', { label: '编辑保存提示' });
+    const editorAfterEdit = await page.evaluate(() => Boolean(document.getElementById('hub-editor-title')));
+    assert.equal(editorAfterEdit, false, '编辑保存后编辑器没有关闭');
+    await waitForText(page, /uitest1.*已连接/, { label: '编辑后重新连接', timeoutMs: 60000 });
+    step('edit-save', { ok: true });
 
     assert.equal(await clickLabel(page, '删除 uitest1'), true);
     await waitForText(page, '删除 MCP 服务', { label: '删除弹窗' });
