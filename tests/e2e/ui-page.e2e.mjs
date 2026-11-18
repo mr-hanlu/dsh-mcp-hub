@@ -243,10 +243,11 @@ async function main() {
     const restored = await page.evaluate(() => [...document.querySelectorAll('input')].some(input => /^\$\{credential:/.test(input.value)));
     assert.equal(restored, true, '隐藏后没有恢复引用模板');
     assert.equal(await clickLabel(page, '编辑密钥'), true, '凭据化步骤找不到「编辑密钥」');
-    await waitForText(page, '新密钥', { label: '编辑密钥弹窗' });
-    await page.type('input[aria-label="新密钥"]', 'sk-live-rotated-0123456789abcdef');
-    assert.equal(await clickLabel(page, '使用此密钥'), true, '编辑密钥弹窗找不到「使用此密钥」');
-    await waitForText(page, '保存后写入 DSH 凭证', { label: '新密钥写入提示' });
+    await waitForText(page, '测试通过后才会写入；失败保留原值', { label: '编辑密钥就地把提示' });
+    await page.waitForSelector('input[aria-label="环境变量值 1"]:not([readonly])', { timeout: 5000 });
+    await page.type('input[aria-label="环境变量值 1"]', 'sk-live-rotated-0123456789abcdef');
+    assert.equal(await clickLabel(page, '测试并保存'), true, '编辑密钥找不到「测试并保存」');
+    await waitForText(page, '新密钥已通过测试，保存后写入 DSH 凭证', { label: '新密钥测试通过', timeoutMs: 30000 });
     step('credential-reveal', { ok: true });
     assert.equal(await clickLabel(page, '关闭配置窗口'), true);
     await waitForText(page, /uiauth/, { label: '凭据化返回列表' });

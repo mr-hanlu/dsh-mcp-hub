@@ -176,9 +176,10 @@ async function writeClipboard(text) {
   try { document.execCommand('copy'); } finally { area.remove(); }
 }
 
-function Pairs({ value = {}, onChange, label, field, variables = [], onReveal, peeks = {}, onPeek, onCopy, now = Date.now() }) {
+function Pairs({ value = {}, onChange, label, field, variables = [], onReveal, peeks = {}, onPeek, onCopy, onTestRenew, now = Date.now() }) {
   const [revealed, setRevealed] = useState({}), [names, setNames] = useState({}), [error, setError] = useState('');
-  const [copied, setCopied] = useState(''), [renew, setRenew] = useState(null);
+  const [copied, setCopied] = useState(''), [editing, setEditing] = useState(null);
+  const [verified, setVerified] = useState({});
   const idOf = useRowIds();
   const entries = Object.entries(value);
   const set = (key, val) => onChange({ ...value, [key]: val });
@@ -208,6 +209,20 @@ function Pairs({ value = {}, onChange, label, field, variables = [], onReveal, p
     try { const val = value[key].includes(MASK) ? await onReveal(field,key) : value[key]; onChange(Object.fromEntries(entries.map(([k,v])=>[k===key?next:k,k===key?val:v]))); setError(''); }
     catch(error) { setError(textError(error)); }
   }
+  /** A new secret enters the draft only after the candidate entry passes a real connection test. */
+  async function confirmRenew() {
+    if (!editing || editing.busy || !editing.value.trim()) return;
+    const { key: renewKey, value: next } = editing;
+    setEditing(current => current ? { ...current, busy: true, error: '' } : current);
+    try {
+      await onTestRenew(field, renewKey, next);
+      set(renewKey, next);
+      setVerified(current => ({ ...current, [field + '/' + renewKey]: true }));
+      setEditing(null);
+    } catch (testError) {
+      setEditing(current => current ? { ...current, busy: false, error: textError(testError) } : current);
+    }
+  }
   return <div className="hub-pairs"><div className="hub-field-caption">{label}<button type="button" className="hub-text-button" onClick={() => { let key = field === 'headers' ? 'Authorization' : 'NEW_VARIABLE'; while (Object.hasOwn(value,key)) key += '_'; onChange({...value,[key]:''}); }}>＋ 添加一项</button></div>
     {entries.map(([key,val],index) => {
       const ref = String(val).match(/^(Bearer\s+)?(?:\$\{(env:|credential:)?([^}]*)\}|\{env:([^}]*)\})$/i);
@@ -221,32 +236,31 @@ function Pairs({ value = {}, onChange, label, field, variables = [], onReveal, p
       const copiedHere = copied === id;
       // Written-out secrets deserve the same treatment as fetched ones.
       const secret = kind === 'literal' && (isSecretKey(key) || /^(?:Bearer|Basic|Token)\s/i.test(String(val)));
-      const canRenew = secret;
-      return <div className="hub-variable-row" key={idOf(key)}><div className={"hub-pair" + (field === 'env' ? ' no-mode' : '') + (peek ? ' peeking' : '')}>
-        <input aria-label={label+'名称 '+(index+1)} value={names[index] ?? key} placeholder="KEY" onChange={event=>setNames({...names,[index]:event.target.value})} onBlur={event=>rename(key,event.target.value.trim())}/>
-        {field !== 'env' && <select aria-label={label+'配置方式 '+(index+1)} value={kind} onChange={event=>set(key,event.target.value==='literal'?'':event.target.value==='env'?defaultPrefix+'${env:}':defaultPrefix+'${credential:}')}><option value="literal">直接填写</option><option value="env">环境变量引用</option><option value="credential">DSH 凭证引用</option></select>}
-        {peek
-          ? <input aria-label={label+'值 '+(index+1)} className="hub-peeked" type="text" readOnly value={peek.value} onFocus={event=>event.currentTarget.select()}/>
-          : <input aria-label={label+'值 '+(index+1)} readOnly={kind === 'credential'} type={secret&&!revealed[key]?'password':'text'} value={field === 'env' ? (typeof val === 'string' ? val : '') : shown} placeholder={field === 'env' ? '填写值' : kind==='literal'?'填写值':kind==='env'?'例如 GITHUB_TOKEN':'凭证名称'} autoComplete="off" onChange={event=>set(key, field === 'env' ? event.target.value : kind==='literal'?event.target.value:kind==='env'?prefix+'${env:'+event.target.value+'}':prefix+'${credential:'+event.target.value+'}')}/>}
+      const verifiedHere = Boolean(verified[id]);
+      const editingHere = editing?.key === key;
+      return <div className="hub-variable-row" key={idOf(key)}><div className={"hub-pair" + (field === 'env' ? ' no-mode' : '') + (peek ? ' peeking' : '') + (editingHere ? ' editing' : '')}>
+        <input aria-label={label+'名称 '+(index+1)} value={names[index] ?? key} placeholder="KEY" readOnly={editingHere} onChange={event=>setNames({...names,[index]:event.target.value})} onBlur={event=>rename(key,event.target.value.trim())}/>
+        {field !== 'env' && <select aria-label={label+'配置方式 '+(index+1)} value={kind} disabled={editingHere} onChange={event=>set(key,event.target.value==='literal'?'':event.target.value==='env'?defaultPrefix+'${env:}':defaultPrefix+'${credential:}')}><option value="literal">直接填写</option><option value="env">环境变量引用</option><option value="credential">DSH 凭证引用</option></select>}
+        {editingHere
+          ? <input aria-label={label+'值 '+(index+1)} type="password" autoFocus autoComplete="off" spellCheck="false" value={editing.value} placeholder="输入新密钥" onChange={event=>setEditing({...editing, value:event.target.value, error:''})} onKeyDown={event=>{ if(event.key==='Enter'){ event.preventDefault(); confirmRenew(); } }}/>
+          : peek
+            ? <input aria-label={label+'值 '+(index+1)} className="hub-peeked" type="text" readOnly value={peek.value} onFocus={event=>event.currentTarget.select()}/>
+            : <input aria-label={label+'值 '+(index+1)} readOnly={kind === 'credential' || verifiedHere} type={(secret || verifiedHere) && !revealed[key] ? 'password':'text'} value={verifiedHere ? String(val) : field === 'env' ? (typeof val === 'string' ? val : '') : shown} placeholder={field === 'env' ? '填写值' : kind==='literal'?'填写值':kind==='env'?'例如 GITHUB_TOKEN':'凭证名称'} autoComplete="off" onChange={event=>set(key, field === 'env' ? event.target.value : kind==='literal'?event.target.value:kind==='env'?prefix+'${env:'+event.target.value+'}':prefix+'${credential:'+event.target.value+'}')}/>}
         <span className="hub-row-actions">
-          {kind === 'credential' && <><IconButton icon="eye" aria-pressed={!!peek} label={peek ? '隐藏密钥' : '显示密钥'} onClick={()=>peekValue(key)}/><IconButton icon="copy" label="复制密钥" onClick={()=>copyValue(key)}/><IconButton icon="key" label="编辑密钥" onClick={()=>setRenew({ key, value: '' })}/></>}
-          {secret && <IconButton icon="eye" aria-pressed={!!revealed[key]} label={revealed[key] ? '隐藏密钥' : '显示密钥'} onClick={()=>{ if(revealed[key]) { setRevealed({...revealed,[key]:false}); return; } if(String(val).includes(MASK)) { show(key,val); return; } setRevealed({...revealed,[key]:true}); }}/>}
-          {canRenew && <IconButton icon="key" label="编辑密钥" onClick={()=>setRenew({ key, value: '' })}/>}
-          <IconButton icon="close" label={'移除 '+key} onClick={()=>onChange(Object.fromEntries(entries.filter(([k])=>k!==key)))}/>
+          {editingHere
+            ? <><IconButton icon="check" label="测试并保存" disabled={editing.busy || !editing.value.trim()} onClick={confirmRenew}/><IconButton icon="close" label="取消编辑" onClick={()=>setEditing(null)}/></>
+            : <>
+                {kind === 'credential' && <><IconButton icon="eye" aria-pressed={!!peek} label={peek ? '隐藏密钥' : '显示密钥'} onClick={()=>peekValue(key)}/><IconButton icon="copy" label="复制密钥" onClick={()=>copyValue(key)}/></>}
+                {(kind === 'credential' || secret) && <IconButton icon="edit" label="编辑密钥" onClick={()=>setEditing({ key, value: '', busy: false, error: '' })}/>}
+                {secret && <IconButton icon="eye" aria-pressed={!!revealed[key]} label={revealed[key] ? '隐藏密钥' : '显示密钥'} onClick={()=>{ if(revealed[key]) { setRevealed({...revealed,[key]:false}); return; } if(String(val).includes(MASK)) { show(key,val); return; } setRevealed({...revealed,[key]:true}); }}/>}
+                <IconButton icon="close" label={'移除 '+key} onClick={()=>onChange(Object.fromEntries(entries.filter(([k])=>k!==key)))}/>
+              </>}
         </span>
-      </div><small className={info?.state==='missing'?'bad':'hub-help'}>{peek ? <>已显示，剩 {remaining} 秒自动隐藏{copiedHere ? ' · 已复制' : ''}</> : copiedHere ? '已复制' : info?.state==='missing'?'找不到引用：'+info.missing.join('、'):info?.source?'已配置（来自 '+info.source+'）':kind==='credential'?'由 DSH 凭证服务解析，连接时验证':field==='env'&&secret?'保存后写入 DSH 凭证':field==='env'?'当前是引用；改为普通值会按明文保存':kind==='env'?'保存为 ${credential:…} 引用，连接时从 DSH 凭证服务读取':secret?'保存后写入 DSH 凭证':String(val).includes(MASK)?'已配置；保持原样将保留原值':val?'已填写':'未填写'}</small></div>;
+      </div>{editingHere
+        ? <small className={editing.error ? 'bad' : 'hub-help'} role={editing.error ? 'alert' : undefined}>{editing.error || (editing.busy ? '正在测试连接…' : '测试通过后才会写入；失败保留原值')}</small>
+        : <small className={info?.state==='missing'?'bad':'hub-help'}>{peek ? <>已显示，剩 {remaining} 秒自动隐藏{copiedHere ? ' · 已复制' : ''}</> : copiedHere ? '已复制' : verifiedHere ? '新密钥已通过测试，保存后写入 DSH 凭证' : info?.state==='missing'?'找不到引用：'+info.missing.join('、'):info?.source?'已配置（来自 '+info.source+'）':kind==='credential'?'由 DSH 凭证服务解析，连接时验证':field==='env'&&secret?'保存后写入 DSH 凭证':field==='env'?'当前是引用；改为普通值会按明文保存':kind==='env'?'保存为 ${credential:…} 引用，连接时从 DSH 凭证服务读取':secret?'保存后写入 DSH 凭证':String(val).includes(MASK)?'已配置；保持原样将保留原值':val?'已填写':'未填写'}</small>}</div>;
     })}
     {!entries.length && <p className="hub-help">没有额外的{label}。</p>}{error && <p className="bad" role="alert">{error}</p>}
-    {renew && <div className="hub-overlay" onMouseDown={event => { if (event.target === event.currentTarget) setRenew(null); }}>
-      <section className="hub-dialog hub-renew-dialog" role="dialog" aria-modal="true" aria-labelledby="hub-renew-title">
-        <header className="hub-dialog-header"><h2 id="hub-renew-title">编辑密钥</h2><IconButton icon="close" label="取消" onClick={()=>setRenew(null)}/></header>
-        <div className="hub-dialog-body">
-          <div className="hub-field"><span>新密钥</span><input autoFocus aria-label="新密钥" type="password" autoComplete="off" spellCheck="false" value={renew.value} placeholder="粘贴新的 Token 或密钥" onChange={event => setRenew({ ...renew, value: event.target.value })}/></div>
-          <p className="hub-help">确认后随对话框保存写入 DSH 凭证服务；仅当该凭证只被当前服务引用时原地轮换，否则为当前服务新建一份。</p>
-        </div>
-        <footer className="hub-dialog-footer"><div className="hub-actions"><button className="hub-button" onClick={()=>setRenew(null)}>取消</button><button className="hub-button primary" disabled={!renew.value.trim()} onClick={()=>{ set(renew.key, renew.value); setRenew(null); }}>使用此密钥</button></div></footer>
-      </section>
-    </div>}
   </div>;
 }
 
@@ -630,6 +644,22 @@ function Editor({ draft, request, revision, reloadRevision, onClose, onSaved, ex
     await writeClipboard(value);
     return value;
   }
+  /** Test the candidate entry with the new secret before letting it reach the draft. */
+  async function testRenew(field, key, next) {
+    const entry = { ...formEntry, [field]: { ...(formEntry[field] ?? {}), [key]: next } };
+    setReading(count => count + 1);
+    try {
+      const result = await request('/test', {
+        name: formName.trim(),
+        entry,
+        candidateId: original ? undefined : draft.candidateId,
+        acceptUnsupported: true,
+      });
+      if (result?.ok) return true;
+      const failed = Array.isArray(result?.checks) ? result.checks.find(check => !check.ok) : null;
+      throw new Error(failed?.detail || '连接测试未通过');
+    } finally { setReading(count => count - 1); }
+  }
   useEffect(() => {
     if (!Object.keys(peeks).length) return undefined;
     const timer = setInterval(() => setPeekClock(Date.now()), 250);
@@ -720,8 +750,8 @@ function Editor({ draft, request, revision, reloadRevision, onClose, onSaved, ex
             <label className="hub-field">启动命令<input value={formEntry.command ?? ''} onChange={event => edit('command', event.target.value)} placeholder="npx、uvx 或可执行文件的绝对路径"/></label>
             <Arguments value={formEntry.args} onChange={value => edit('args', value)} onReveal={reveal}/>
             <label className="hub-field">工作目录 <span className="hub-optional">可选</span><input value={formEntry.cwd ?? ''} onChange={event => edit('cwd', event.target.value)} placeholder="留空由 DSH 决定"/><small>本地命令的运行目录；命令或参数使用相对路径时填写，例如项目根目录。留空则继承 DSH 当前目录。</small></label>
-            <Pairs label="环境变量" field="env" value={formEntry.env} variables={formVariables} onReveal={reveal} peeks={peeks} onPeek={peek} onCopy={copy} now={peekClock} onChange={value => edit('env', value)}/>
-          </> : <><label className="hub-field">服务地址<input value={formEntry.url ?? ''} onChange={event => edit('url', event.target.value)} placeholder="https://example.com/mcp"/><small>地址中的凭证已隐藏，修改地址时请填写完整新地址。</small></label><Pairs label="请求头" field="headers" value={formEntry.headers} variables={formVariables} onReveal={reveal} peeks={peeks} onPeek={peek} onCopy={copy} now={peekClock} onChange={value => edit('headers', value)}/></>}
+            <Pairs label="环境变量" field="env" value={formEntry.env} variables={formVariables} onReveal={reveal} peeks={peeks} onPeek={peek} onCopy={copy} onTestRenew={testRenew} now={peekClock} onChange={value => edit('env', value)}/>
+          </> : <><label className="hub-field">服务地址<input value={formEntry.url ?? ''} onChange={event => edit('url', event.target.value)} placeholder="https://example.com/mcp"/><small>地址中的凭证已隐藏，修改地址时请填写完整新地址。</small></label><Pairs label="请求头" field="headers" value={formEntry.headers} variables={formVariables} onReveal={reveal} peeks={peeks} onPeek={peek} onCopy={copy} onTestRenew={testRenew} now={peekClock} onChange={value => edit('headers', value)}/></>}
           {!!formIssues.length && <div className="hub-compatibility"><strong>有配置需要核对</strong><ul>{formIssues.map(issue => <li key={issue}>{issue}</li>)}</ul><label><input type="checkbox" checked={formAccept} onChange={event => setFormAccept(event.target.checked)}/>我已核对，确认不迁移上述不支持的字段</label></div>}
         </>}
       </fieldset>
