@@ -1,0 +1,23 @@
+model = "gpt-5-codex"
+approval_policy = "on-request"
+
+[mcp_servers.computer-use]
+command = "./Codex Computer Use.app/Contents/SharedSupport/SkyComputerUseClient"
+args = ["mcp"]
+
+[mcp_servers.repl]
+command = "/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node_repl"
+args = []
+env_vars = ["BROWSER_USE_ACCESS_PIPE_PATH", "NODE_REPL_TRUSTED_SERVICES"]
+startup_timeout_sec = 120
+
+[mcp_servers.repl.env]
+NODE_REPL_NATIVE_PIPE_CONNECT_TIMEOUT_MS = "2000"
+
+[mcp_servers.docs]
+url = "https://docs.example.com/mcp"
+bearer_token_env_var = "DOCS_TOKEN"
+startup_timeout_sec = 20
+
+[mcp_servers.docs.env_http_headers]
+X-Tenant-Id = "TENANT_ID"

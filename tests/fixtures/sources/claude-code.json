@@ -1,0 +1,29 @@
+{
+  "numStartups": 12,
+  "installMethod": "native",
+  "lastOnboardingVersion": "2.1.71",
+  "mcpServers": [],
+  "projects": {
+    "/Users/example/work/shop-api": {
+      "allowedTools": [],
+      "mcpServers": {
+        "playwright": { "command": "npx", "args": ["-y", "@playwright/mcp@latest"] },
+        "internal-docs": {
+          "type": "http",
+          "url": "https://docs.example.com/mcp",
+          "headers": { "Authorization": "Bearer ${DOCS_TOKEN}" }
+        },
+        "legacy-sse": { "type": "sse", "url": "https://sse.example.com/events" }
+      }
+    },
+    "/Users/example/work/analytics": {
+      "mcpServers": {
+        "warehouse": {
+          "command": "python3",
+          "args": ["-m", "warehouse_mcp"],
+          "env": { "WAREHOUSE_DSN": "${WAREHOUSE_DSN}" }
+        }
+      }
+    }
+  }
+}

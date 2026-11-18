@@ -1,0 +1,11 @@
+{
+  "theme": "Default",
+  "mcpServers": {
+    "search": {
+      "httpUrl": "https://search.example.com/mcp",
+      "headers": { "Authorization": "Bearer ${SEARCH_TOKEN}" },
+      "timeout": 30000,
+      "trust": true
+    }
+  }
+}

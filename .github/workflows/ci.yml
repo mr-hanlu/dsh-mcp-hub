@@ -88,6 +88,13 @@ jobs:
           DSH_E2E_REQUIRED: '1'
           CHROME_PATH: ${{ vars.DSH_E2E_CHROME_PATH }}
         run: npm run test:ui
+
+      - name: 布局验收（浅色 / 深色 / 窄窗口）
+        env:
+          DSH_E2E_REQUIRED: '1'
+          CHROME_PATH: ${{ vars.DSH_E2E_CHROME_PATH }}
+        run: npm run test:layout
+
       - name: 保留失败截图
         # test:ui 失败时把现场页面写到 tests/e2e/artifacts/，这里收进 artifact。
         if: failure()

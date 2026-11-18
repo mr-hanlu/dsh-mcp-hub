@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/Users/example/Documents"]
+    },
+    "company-wiki": {
+      "command": "npx",
+      "args": ["-y", "wiki-mcp"],
+      "env": { "WIKI_API_KEY": "sk-example-replaced" },
+      "disabled": true
+    }
+  },
+  "preferences": { "sidebarMode": "chat" }
+}

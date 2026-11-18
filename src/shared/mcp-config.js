@@ -23,7 +23,7 @@ export function parseDocument(text, path, options = {}) {
 
 /** Fields every entry may carry, regardless of transport. */
 const COMMON_FIELDS = ['transport', 'type', 'enabled', 'disabled', 'startup_timeout_sec', 'tool_timeout_sec', 'startupTimeoutMs', 'toolCallTimeoutMs', 'closeTimeoutMs', 'reconnect'];
-const STDIO_FIELDS = ['command', 'args', 'env', 'environment', 'cwd'];
+const STDIO_FIELDS = ['command', 'args', 'env', 'environment', 'env_vars', 'cwd'];
 const HTTP_FIELDS = ['url', 'httpUrl', 'serverUrl', 'headers', 'http_headers', 'env_http_headers', 'bearer_token_env_var'];
 const isEmptyValue = value => value === undefined || value === null || value === '' || (object(value) && Object.keys(value).length === 0);
 
@@ -37,7 +37,14 @@ export function normalize(name, raw) {
     entry.transport = 'stdio';
     entry.command = Array.isArray(raw.command) ? raw.command[0] : raw.command;
     entry.args = Array.isArray(raw.command) ? raw.command.slice(1) : raw.args ?? [];
-    entry.env = raw.env ?? raw.environment ?? {};
+    // Codex 的 `env_vars = ["NAME", …]` 意思是「从宿主环境转发这些变量」，
+    // 不是普通未知字段：迁移成引用，值仍由环境/凭证服务在连接时提供。
+    const forwarded = Array.isArray(raw.env_vars) ? raw.env_vars.filter(name => typeof name === 'string' && name) : [];
+    if (raw.env_vars !== undefined && (!Array.isArray(raw.env_vars) || forwarded.length !== raw.env_vars.length)) issues.push('需要处理未迁移字段：env_vars');
+    const forwardedEnv = Object.fromEntries(forwarded.map(name => [name, '${env:' + name + '}']));
+    const explicitEnv = raw.env ?? raw.environment;
+    // 形状不对的 env 要原样交给 assertEntryShape 报错，不能被展开成 {0:"…"} 悄悄接受。
+    entry.env = explicitEnv === undefined || object(explicitEnv) ? { ...forwardedEnv, ...(explicitEnv ?? {}) } : explicitEnv;
     if (raw.cwd) entry.cwd = raw.cwd;
   } else if (['remote', 'http', 'streamable-http'].includes(transport)) {
     entry.transport = 'streamable-http';
@@ -98,6 +105,9 @@ function containerOf(document) {
  */
 export function extract(document) {
   const { container, prefix } = containerOf(document);
+  // 实测 `~/.claude.json` 会写成 `"mcpServers": []`：那是「一个服务都没有」，
+  // 按解析失败上报会让整个来源显示成「无法读取或解析配置」。
+  if (Array.isArray(container) && !container.length) return [];
   if (!object(container)) fail('CONFIG_INVALID', '未找到有效的 MCP 配置列表');
   return Object.entries(container).map(([name, raw]) => {
     const path = [...prefix, name];

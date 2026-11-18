@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "postgres": {
+      "command": "npx",
+      "args": ["-y", "@bytebase/dbhub", "--dsn", "postgresql://readonly@db.example.com:5432/app"],
+      "env": { "DBHUB_DISABLE_TELEMETRY": "1" }
+    }
+  }
+}

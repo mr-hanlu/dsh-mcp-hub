@@ -1,0 +1,20 @@
+{
+  // OpenCode 全局配置：容器是 mcp，条目用 type local / remote
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "servers": {
+      "math": {
+        "type": "local",
+        "command": ["node", "math-server.js"],
+        "environment": { "MATH_TOKEN": "${MATH_TOKEN}" },
+        "enabled": true
+      },
+      "catalog": {
+        "type": "remote",
+        "url": "https://catalog.example.com/mcp",
+        "headers": { "X-Api-Key": "{env:CATALOG_KEY}" }
+      },
+      "retired": { "type": "local", "command": ["node", "retired.js"], "enabled": false }
+    }
+  }
+}

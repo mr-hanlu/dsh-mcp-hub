@@ -16,6 +16,18 @@ test('parses OpenCode JSONC command arrays, old and nested containers', () => {
     assert.equal(row.entry.command, 'node'); assert.deepEqual(row.entry.args, ['server.js']); assert.equal(row.entry.env.KEY, 'abc');
   }
 });
+test('an empty server list means no services, not an unreadable file', () => {
+  // 实测 `~/.claude.json` 写成 `"mcpServers": []`；当成解析失败会让整个来源显示为读取错误。
+  assert.deepEqual(extract(parseDocument('{"mcpServers": []}', 'x.json')), []);
+  assert.deepEqual(extract(parseDocument('{"mcpServers": {}}', 'x.json')), []);
+});
+test('Codex env_vars becomes references, and a malformed value stays visible for review', () => {
+  const [row] = extract(parseDocument('[mcp_servers.a]\ncommand="node"\nenv_vars=["HOST_ONLY"]\n', 'config.toml'));
+  assert.equal(row.entry.env.HOST_ONLY, '${env:HOST_ONLY}');
+  assert.deepEqual(row.issues, []);
+  const [broken] = extract(parseDocument('[mcp_servers.a]\ncommand="node"\nenv_vars="HOST_ONLY"\n', 'config.toml'));
+  assert.match(broken.issues.join(' '), /env_vars/);
+});
 test('unknown policy and auth fields require explicit review instead of silently disappearing', () => {
   const [row] = extract({ mcpServers: { demo: { url: 'https://example.com/mcp', disabledTools: ['delete'], oauth: true } } });
   assert.match(row.issues.join(' '), /disabledTools/); assert.match(row.issues.join(' '), /oauth/);

@@ -1,0 +1,16 @@
+{
+  "inputs": [],
+  "servers": {
+    "local-tools": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["tools/index.js"],
+      "envFile": "${workspaceFolder}/.env"
+    },
+    "remote-tools": {
+      "type": "http",
+      "url": "https://tools.example.com/mcp",
+      "headers": { "X-Api-Key": "${TOOLS_KEY}" }
+    }
+  }
+}
