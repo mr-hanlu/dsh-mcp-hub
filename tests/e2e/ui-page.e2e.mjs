@@ -233,17 +233,19 @@ async function main() {
     // 「显示」通过 Host 解析 DSH 凭证，10 秒后自动隐藏。
     assert.equal(await clickLabel(page, '编辑 uiauth'), true, '凭据化步骤找不到「编辑 uiauth」');
     await waitForText(page, '编辑 MCP 服务', { label: '凭据化编辑窗口' });
-    assert.equal(await clickLabel(page, '显示'), true, '凭据化步骤找不到「显示」');
+    const locked = await page.evaluate(() => [...document.querySelectorAll('input')].some(input => input.readOnly && /^\$\{credential:/.test(input.value)));
+    assert.equal(locked, true, '凭证引用字段不是只读');
+    assert.equal(await clickLabel(page, '显示密钥'), true, '凭据化步骤找不到「显示密钥」');
     assert.equal(await waitForInputValue(page, 'sk-live-e2e-0123456789abcdef'), true, '凭证值没有出现在只读输入框');
-    assert.equal(await clickLabel(page, '复制'), true, '凭据化步骤找不到「复制」');
+    assert.equal(await clickLabel(page, '复制密钥'), true, '凭据化步骤找不到「复制密钥」');
     await waitForText(page, /已复制/, { label: '凭证复制提示' });
-    assert.equal(await clickLabel(page, '隐藏'), true, '凭据化步骤找不到「隐藏」');
+    assert.equal(await clickLabel(page, '隐藏密钥'), true, '凭据化步骤找不到「隐藏密钥」');
     const restored = await page.evaluate(() => [...document.querySelectorAll('input')].some(input => /^\$\{credential:/.test(input.value)));
     assert.equal(restored, true, '隐藏后没有恢复引用模板');
-    assert.equal(await clickLabel(page, '更换密钥'), true, '凭据化步骤找不到「更换密钥」');
-    await waitForText(page, '新密钥', { label: '更换密钥弹窗' });
+    assert.equal(await clickLabel(page, '编辑密钥'), true, '凭据化步骤找不到「编辑密钥」');
+    await waitForText(page, '新密钥', { label: '编辑密钥弹窗' });
     await page.type('input[aria-label="新密钥"]', 'sk-live-rotated-0123456789abcdef');
-    assert.equal(await clickLabel(page, '使用此密钥'), true, '更换密钥弹窗找不到「使用此密钥」');
+    assert.equal(await clickLabel(page, '使用此密钥'), true, '编辑密钥弹窗找不到「使用此密钥」');
     await waitForText(page, '保存后写入 DSH 凭证', { label: '新密钥写入提示' });
     step('credential-reveal', { ok: true });
     assert.equal(await clickLabel(page, '关闭配置窗口'), true);

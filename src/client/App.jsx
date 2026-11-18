@@ -44,6 +44,8 @@ const ICONS = {
   bolt: <path d="m13 2-9 12h7l-1 8 10-12h-7z"/>, info: <><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7v1"/></>,
   pulse: <><path d="M3 12h4l2-6 3 12 2-6h5"/></>,
   eye: <><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></>,
+  copy: <><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h8"/></>,
+  key: <><circle cx="8" cy="8" r="4"/><path d="m11 11 9 9M17 17l2 2M14 20l2 2"/></>,
 };
 export function Icon({ name, size = 18, ...props }) { return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>{ICONS[name] ?? ICONS.box}</svg>; }
 
@@ -219,26 +221,28 @@ function Pairs({ value = {}, onChange, label, field, variables = [], onReveal, p
       const copiedHere = copied === id;
       // Written-out secrets deserve the same treatment as fetched ones.
       const secret = kind === 'literal' && (isSecretKey(key) || /^(?:Bearer|Basic|Token)\s/i.test(String(val)));
-      const canRenew = kind === 'credential' || secret;
+      const canRenew = secret;
       return <div className="hub-variable-row" key={idOf(key)}><div className={"hub-pair" + (field === 'env' ? ' no-mode' : '') + (peek ? ' peeking' : '')}>
         <input aria-label={label+'名称 '+(index+1)} value={names[index] ?? key} placeholder="KEY" onChange={event=>setNames({...names,[index]:event.target.value})} onBlur={event=>rename(key,event.target.value.trim())}/>
         {field !== 'env' && <select aria-label={label+'配置方式 '+(index+1)} value={kind} onChange={event=>set(key,event.target.value==='literal'?'':event.target.value==='env'?defaultPrefix+'${env:}':defaultPrefix+'${credential:}')}><option value="literal">直接填写</option><option value="env">环境变量引用</option><option value="credential">DSH 凭证引用</option></select>}
         {peek
           ? <input aria-label={label+'值 '+(index+1)} className="hub-peeked" type="text" readOnly value={peek.value} onFocus={event=>event.currentTarget.select()}/>
-          : <input aria-label={label+'值 '+(index+1)} type={secret&&!revealed[key]?'password':'text'} value={field === 'env' ? (typeof val === 'string' ? val : '') : shown} placeholder={field === 'env' ? '填写值' : kind==='literal'?'填写值':kind==='env'?'例如 GITHUB_TOKEN':'凭证名称'} autoComplete="off" onChange={event=>set(key, field === 'env' ? event.target.value : kind==='literal'?event.target.value:kind==='env'?prefix+'${env:'+event.target.value+'}':prefix+'${credential:'+event.target.value+'}')}/>}
-        {kind === 'credential' && <><button type="button" className="hub-text-button" aria-pressed={!!peek} onClick={()=>peekValue(key)}>{peek ? '隐藏' : '显示'}</button><button type="button" className="hub-text-button" onClick={()=>copyValue(key)}>复制</button></>}
-        {secret && <button type="button" className="hub-text-button" onClick={()=>{ if(revealed[key]) { setRevealed({...revealed,[key]:false}); return; } if(String(val).includes(MASK)) { show(key,val); return; } setRevealed({...revealed,[key]:true}); }}>{revealed[key]?'隐藏':'显示'}</button>}
-        {canRenew && <button type="button" className="hub-text-button" onClick={()=>setRenew({ key, value: '' })}>更换密钥</button>}
-        <IconButton icon="close" label={'移除 '+key} onClick={()=>onChange(Object.fromEntries(entries.filter(([k])=>k!==key)))}/>
+          : <input aria-label={label+'值 '+(index+1)} readOnly={kind === 'credential'} type={secret&&!revealed[key]?'password':'text'} value={field === 'env' ? (typeof val === 'string' ? val : '') : shown} placeholder={field === 'env' ? '填写值' : kind==='literal'?'填写值':kind==='env'?'例如 GITHUB_TOKEN':'凭证名称'} autoComplete="off" onChange={event=>set(key, field === 'env' ? event.target.value : kind==='literal'?event.target.value:kind==='env'?prefix+'${env:'+event.target.value+'}':prefix+'${credential:'+event.target.value+'}')}/>}
+        <span className="hub-row-actions">
+          {kind === 'credential' && <><IconButton icon="eye" aria-pressed={!!peek} label={peek ? '隐藏密钥' : '显示密钥'} onClick={()=>peekValue(key)}/><IconButton icon="copy" label="复制密钥" onClick={()=>copyValue(key)}/><IconButton icon="key" label="编辑密钥" onClick={()=>setRenew({ key, value: '' })}/></>}
+          {secret && <IconButton icon="eye" aria-pressed={!!revealed[key]} label={revealed[key] ? '隐藏密钥' : '显示密钥'} onClick={()=>{ if(revealed[key]) { setRevealed({...revealed,[key]:false}); return; } if(String(val).includes(MASK)) { show(key,val); return; } setRevealed({...revealed,[key]:true}); }}/>}
+          {canRenew && <IconButton icon="key" label="编辑密钥" onClick={()=>setRenew({ key, value: '' })}/>}
+          <IconButton icon="close" label={'移除 '+key} onClick={()=>onChange(Object.fromEntries(entries.filter(([k])=>k!==key)))}/>
+        </span>
       </div><small className={info?.state==='missing'?'bad':'hub-help'}>{peek ? <>已显示，剩 {remaining} 秒自动隐藏{copiedHere ? ' · 已复制' : ''}</> : copiedHere ? '已复制' : info?.state==='missing'?'找不到引用：'+info.missing.join('、'):info?.source?'已配置（来自 '+info.source+'）':kind==='credential'?'由 DSH 凭证服务解析，连接时验证':field==='env'&&secret?'保存后写入 DSH 凭证':field==='env'?'当前是引用；改为普通值会按明文保存':kind==='env'?'保存为 ${credential:…} 引用，连接时从 DSH 凭证服务读取':secret?'保存后写入 DSH 凭证':String(val).includes(MASK)?'已配置；保持原样将保留原值':val?'已填写':'未填写'}</small></div>;
     })}
     {!entries.length && <p className="hub-help">没有额外的{label}。</p>}{error && <p className="bad" role="alert">{error}</p>}
     {renew && <div className="hub-overlay" onMouseDown={event => { if (event.target === event.currentTarget) setRenew(null); }}>
       <section className="hub-dialog hub-renew-dialog" role="dialog" aria-modal="true" aria-labelledby="hub-renew-title">
-        <header className="hub-dialog-header"><h2 id="hub-renew-title">更换密钥</h2><IconButton icon="close" label="取消" onClick={()=>setRenew(null)}/></header>
+        <header className="hub-dialog-header"><h2 id="hub-renew-title">编辑密钥</h2><IconButton icon="close" label="取消" onClick={()=>setRenew(null)}/></header>
         <div className="hub-dialog-body">
           <div className="hub-field"><span>新密钥</span><input autoFocus aria-label="新密钥" type="password" autoComplete="off" spellCheck="false" value={renew.value} placeholder="粘贴新的 Token 或密钥" onChange={event => setRenew({ ...renew, value: event.target.value })}/></div>
-          <p className="hub-help">保存后写入 DSH 凭证服务；仅当该凭证只被当前服务引用时原地轮换，否则为当前服务新建一份。</p>
+          <p className="hub-help">确认后随对话框保存写入 DSH 凭证服务；仅当该凭证只被当前服务引用时原地轮换，否则为当前服务新建一份。</p>
         </div>
         <footer className="hub-dialog-footer"><div className="hub-actions"><button className="hub-button" onClick={()=>setRenew(null)}>取消</button><button className="hub-button primary" disabled={!renew.value.trim()} onClick={()=>{ set(renew.key, renew.value); setRenew(null); }}>使用此密钥</button></div></footer>
       </section>
