@@ -9,6 +9,8 @@
  *   - JSON / 表单两个页签切换后草稿是否还在
  *   - 连接测试进行中显示进度并可取消
  *   - 已存在的同名服务在粘贴后标为跳过，只测试、只添加新服务
+ *   - 连接测试失败时行内给出失败状态，且不允许添加
+ *   - 保存成功后编辑器自动关闭
  * 失败时会往 tests/e2e/artifacts/ 留一张全页截图。
  *
  * 用法：npm run test:ui
@@ -141,6 +143,17 @@ async function main() {
     await waitForText(page, '已取消测试', { label: '取消测试提示' });
     step('test-cancel', { ok: true });
 
+    // 失败原因：命令立即以非零码退出，行内要显示「测试失败」且不给添加。
+    await pasteJson(page, JSON.stringify({ mcpServers: { uibad: { command: '/bin/sh', args: ['-c', 'exit 3'], cwd: repoRoot } } }, null, 2));
+    assert.equal(await clickLabel(page, '测试全部'), true, '找不到「测试全部」');
+    await waitForText(page, '测试失败', { label: '测试失败状态', timeoutMs: 30000 });
+    const addDisabled = await page.evaluate(() => {
+      const button = Array.from(document.querySelectorAll('button')).find(node => /^添加 1 个$/.test((node.textContent || '').trim()));
+      return button ? button.disabled : null;
+    });
+    assert.equal(addDisabled, true, '测试失败后仍允许添加');
+    step('test-fail-reason', { ok: true });
+
     const entry = command => ({ command, args: [fixture], cwd: repoRoot });
     const document = { mcpServers: { uitest1: entry(process.execPath), uitest2: entry(process.execPath) } };
     await pasteJson(page, JSON.stringify(document, null, 2));
@@ -169,6 +182,11 @@ async function main() {
     await waitForText(page, /uitest3.*已连接/, { label: '新服务连接', timeoutMs: 60000 });
     step('duplicate-skip', { ok: true, added: 1, skipped: 1 });
 
+    // 保存成功后编辑器自动关闭，列表里能看到新行。
+    const editorOpen = await page.evaluate(() => Boolean(document.getElementById('hub-editor-title')));
+    assert.equal(editorOpen, false, '保存成功后编辑器没有关闭');
+    step('save-closed', { ok: true });
+
     assert.equal(await clickLabel(page, '删除 uitest1'), true);
     await waitForText(page, '删除 MCP 服务', { label: '删除弹窗' });
     assert.equal(await clickLabel(page, '删除'), true);
@@ -185,6 +203,20 @@ async function main() {
     assert.equal(await clickLabel(page, '删除'), true);
     await waitForText(page, '连接你的第一个 MCP', { label: '删除后空状态', timeoutMs: 30000 });
     step('delete-all', { ok: true, count: 0 });
+  } catch (error) {
+    // 失败时留一张全页截图，CI 的 artifact 能直接看到当时的界面。
+    let screenshot = '';
+    if (failurePage) {
+      try {
+        const dir = repoRoot + '/tests/e2e/artifacts';
+        await mkdir(dir, { recursive: true });
+        screenshot = dir + '/ui-failure-' + Date.now() + '.png';
+        await failurePage.screenshot({ path: screenshot, fullPage: true });
+      } catch {}
+    }
+    console.error(JSON.stringify({ ok: false, steps: report, error: String(error?.message ?? error), screenshot }, null, 2));
+    process.exitCode = 1;
+    return;
   } finally {
     if (browser) await browser.close().catch(() => {});
     if (session) await session.stop();
@@ -193,17 +225,8 @@ async function main() {
   console.log(JSON.stringify({ ok: true, steps: report }, null, 2));
 }
 
-main().catch(async error => {
-  // 失败时留一张全页截图，CI 的 artifact 能直接看到当时的界面。
-  let screenshot = '';
-  if (failurePage) {
-    try {
-      const dir = repoRoot + '/tests/e2e/artifacts';
-      await mkdir(dir, { recursive: true });
-      screenshot = dir + '/ui-failure-' + Date.now() + '.png';
-      await failurePage.screenshot({ path: screenshot, fullPage: true });
-    } catch {}
-  }
-  console.error(JSON.stringify({ ok: false, steps: report, error: String(error?.message ?? error), screenshot }, null, 2));
+main().catch(error => {
+  // 只有创建 profile / 启动浏览器之前就失败才会走到这里。
+  console.error(JSON.stringify({ ok: false, steps: report, error: String(error?.message ?? error) }, null, 2));
   process.exitCode = 1;
 });
