@@ -2,7 +2,7 @@
 
 更新日期：2026-11-18（Asia/Shanghai）
 
-> 收工状态：单测 126 项、`check`、`build`、`test:e2e`（stdio + 启动/重连边界 + HTTP + 凭证 + 删除后同名重加）、`test:ui`（页面主流程，21 步）全部通过；桌面实例已 link 安装并完成第一轮验收。CI 基础流水线与端到端作业已接入；启停后的验证结论已能刷新；密钥已统一写入 DSH 凭证服务，配置只保留引用；删除后清理期的同名重加不再误报重名；页面剩余分支（表单补全变量、重命名引用行、失败后重测）已补齐。下一步是桌面人工项与真实来源样本，见 [后续任务](NEXT_TASKS.md#下一次开发的建议顺序)。
+> 收工状态：单测 138 项、`check`、`build`、`test:e2e`（stdio + 启动/重连边界 + HTTP + 凭证 + 删除后同名重加）、`test:ui`（页面主流程，21 步）、`test:layout`（浅色/深色/窄窗口）全部通过；桌面实例已 link 安装并完成第一轮验收。CI 基础流水线与端到端作业已接入；启停后的验证结论已能刷新；密钥已统一写入 DSH 凭证服务，配置只保留引用；删除后清理期的同名重加不再误报重名；页面剩余分支（表单补全变量、重命名引用行、失败后重测）已补齐；来源兼容矩阵用真实 Claude Code / Codex 样本建立；桌面人工项整理成清单。下一步是清单里的桌面验收与其余来源的真实文件，见 [后续任务](NEXT_TASKS.md#下一次开发的建议顺序)。
 
 ## 当前版本与状态
 
@@ -11,6 +11,23 @@
 - 尚未发布到 npm、插件市场或创建正式发布标签；本次只进行本地 Git 提交，push 由仓库维护者执行。
 - 功能重点为「已添加」「本地导入」和「在线搜索」；在线搜索只接官方 MCP Registry，选择后预填编辑页，不静默安装。
 - 桌面 `desktop` profile 已用 link 方式安装：`~/.dsh/profiles/desktop/package.json` 里 `dsh-mcp-hub` 指向本仓库，bundles 也含它；第一轮验收见下文。尚未系统验收的是主题与窄窗口、重启 DSH 后的恢复、凭证缺失与凭证服务不可用这些人工项。
+
+## 本轮（2026-11-18）：来源兼容矩阵与布局验收
+
+用**本机真实存在**的配置文件反推扫描规则，顺手抓到两个只有真实样本才会暴露的问题，再把「看页面」的那部分布局检查自动化。
+
+| 位置 | 处理 |
+| --- | --- |
+| `tests/fixtures/sources/`（新增，8 个样本 + README） | Claude Code（2.1.71）与 Codex CLI（0.125.0）的样本取自本机真实文件，结构、字段名与真实一致，路径/名称/取值全部替换；Claude Desktop 本机文件没有 MCP 服务，其余（OpenCode / Gemini / VS Code / Windsurf / Copilot）按文档整理。README 逐条标注了「真实抓取」还是「按文档整理」，不用一种口径冒充另一种。 |
+| `src/shared/mcp-config.js`：空服务列表 | 真实 `~/.claude.json` 写的是 `"mcpServers": []`。此前 `extract()` 把空数组当成「未找到有效的 MCP 配置列表」抛错，整个来源会显示成「无法读取或解析配置」。现在空数组/空对象都返回 0 个服务。 |
+| `src/shared/mcp-config.js`：Codex `env_vars` | 真实 `~/.codex/config.toml` 用 `env_vars = ["BROWSER_USE_ACCESS_PIPE_PATH", …]` 表示「从宿主环境转发这些变量」。此前它是个未知字段，导入时会要求用户核对且变量丢失；现在迁移成 `NAME: ${env:NAME}` 引用，值仍由环境/凭证服务在连接时提供，显式 `[mcp_servers.x.env]` 的值优先。 |
+| `src/shared/mcp-config.js`：env 形状 | 合入 `env_vars` 时先把 `env` 展开成对象，一度让 `env: ['bad']` 这种坏形状变成 `{0:'bad'}` 并被静默接受；已改回「形状不对就交给 `assertEntryShape` 报错」，并由单测守住。 |
+| `tests/sources.test.mjs`（新增，10 项） | 样本摆进临时 HOME 走真实扫描：Claude Code 项目级服务与 SSE 不支持提示、Codex 相对命令/`env_vars`/Bearer/`env_http_headers`/`CODEX_HOME`、Claude Desktop 停用项、OpenCode JSONC 与路径覆盖、Gemini 的 `timeout`/`trust` 待核对、VS Code 的 `envFile`、Windsurf/Copilot/Cursor 解析、同名不同配置与相同 URL 不同认证的判定、相对命令/相对参数/空 PATH 的提示。 |
+| `tests/e2e/ui-layout.e2e.mjs`（新增）+ `npm run test:layout` + CI | 真实插件页面上截浅色 / 深色 / 700px 窄窗口 / 窄窗口编辑窗口四张图到 `tests/e2e/artifacts/layout-*.png`，并断言页面无横向溢出、编辑窗口不超出视口、深浅色真换了底色。自动化的只有插件自带的回退配色与布局；桌面注入的 `--dsw-alias-*` 主题变量仍要人工看。 |
+| `docs/DESKTOP_ACCEPTANCE.md`（新增） | P0-1 剩余人工项拆成可勾选清单：主题与窄窗口、重启恢复、凭证缺失、凭证服务不可用（需开发辅助）、与官方 Manager / 插件注册 / 继承配置的边界、删除清理；附记录模板和失败时要附的证据。 |
+| `tests/config.test.mjs` | 新增 2 项：空服务列表不算解析失败；`env_vars` 迁移与坏形状的待核对提示。 |
+
+验证：`npm test` 138 项、`npm run check`、`npm run build`、`npm run test:e2e`（26 步）、`npm run test:ui`（21 步）、`npm run test:layout`（4 张截图）全部通过。
 
 ## 本轮（2026-11-18）：页面剩余分支与「不做草稿」的决定
 
@@ -269,18 +286,19 @@ CI：`.github/workflows/ci.yml` 分两个作业。`checks` 在 `ubuntu-latest` �
 
 | 验证方式 | 结果与覆盖范围 |
 | --- | --- |
-| `npm test` | 126 项通过：格式解析、高德配置回归、env 缺失与凭据判定、脱敏、重复判断、版本冲突、旧连接误判、工具注册等待、真实非 MCP 程序拒绝、密钥写入凭证服务与名称生成/冲突/独占轮换、reveal 与导出解析、硬约束与错误 code、项目级导入、坏条目容错、验证结果持久化、启停后重新验证、推送通道、复诊、备份占位符、删除后清理期的同名重加与重试（`NAME_CLEANING`）、首次连接的「可能在下载依赖」提示、缺失变量名不带 `env:` 前缀等 |
+| `npm test` | 138 项通过：格式解析、高德配置回归、env 缺失与凭据判定、脱敏、重复判断、版本冲突、旧连接误判、工具注册等待、真实非 MCP 程序拒绝、密钥写入凭证服务与名称生成/冲突/独占轮换、reveal 与导出解析、硬约束与错误 code、项目级导入、坏条目容错、验证结果持久化、启停后重新验证、推送通道、复诊、备份占位符、删除后清理期的同名重加与重试（`NAME_CLEANING`）、首次连接的「可能在下载依赖」提示、缺失变量名不带 `env:` 前缀、来源兼容矩阵（真实 Claude Code / Codex 样本、空服务列表、`env_vars` 转发、相对命令与空 PATH）等 |
 | `npm run check` | Host JavaScript 语法检查通过 |
 | `npm run build` | 插件浏览器模块及独立预览构建通过 |
 | `npm run test:e2e` | 通过：临时 `DSH_HOME` + `web` 模板 profile，真实 `/api/dsh-mcp-hub/*` 路由跑完 stdio 全链路（列表、扫描、测试、添加、验证、工具、启停、重启、删除）、启动/重连边界（2.5 秒慢握手、2 秒慢工具发现、握手后退出进入重连退避）与 Streamable HTTP 全链路（静态 Bearer、凭证模板、凭证轮换重连、错误 token 判为需要认证）；删除后等官方清理行消失、删除后立刻同名重加（运行中的同名仍判 `NAME_TAKEN`）；不写用户 profile |
 | `npm run test:ui` | 通过（21 步）：无头 Chrome 在临时 profile 上点完设置页 —— 导航到 MCP Hub、空状态、导入页签、JSON 粘贴逐行测试、一次添加两个并显示已连接、重名跳过、测试进度与取消、连接失败原因、缺失环境变量、编辑已有服务、保存后关闭、删除弹窗与删后空状态、页签切换草稿保留、表单里缺引用时「直接填写」补全并重测通过、重命名凭证引用行保持引用、测试失败后改配置重测通过；失败留截图 |
-| `node scripts/assert-pack.mjs` | 通过：`npm pack --dry-run --json --ignore-scripts` 的清单含 23 个文件，Host / 共享模块 / 浏览器模块 / 样式 / patch / locale / icon / 文档 / LICENSE 齐全，复审报告未进包 |
+| `npm run test:layout` | 通过：真实插件页面在临时 profile 里截浅色 / 深色 / 700px 窄窗口 / 窄窗口编辑窗口，断言无横向溢出、编辑窗口不超出视口、深浅色底色不同（覆盖插件回退配色；DSH 主题变量仍需桌面人工看） |
+| `node scripts/assert-pack.mjs` | 通过：`npm pack --dry-run --json --ignore-scripts` 的清单含 24 个文件，Host / 共享模块 / 浏览器模块 / 样式 / patch / locale / icon / 文档 / LICENSE 齐全，复审报告未进包 |
 | CI | 已接入 `.github/workflows/ci.yml`：基础作业公开 runner 可跑；端到端作业需自托管 runner（`DSH_E2E_RUNNER=true` + `dsh` 标签），CI 内 `DSH_E2E_REQUIRED=1` 禁止 SKIP |
 | `npm run test:integration` | 1 项真实集成测试通过：官方 DSH 0.2.2-rc.3 临时 profile 中，测试不持久化、保存持久化、连接、工具注册、显式读取、重复判断、停用、停用编辑和删除 |
 | 桌面实机验收 | 见「第一轮桌面验收」：安装、挂载、列表、测试、添加与验证、工具、启停、删除均通过；重启缺陷已修 |
 | 浏览器验收 | 预览中验证 JSON 自动识别、env 引用显示与缺失提示、删除弹窗、删除后重新导入、保存关闭、Toast 消失和深浅色布局 |
 | 预览 HTTP 接口 | 真实调用接口，确认可执行文件存在但不实现 MCP 时返回失败 |
-| 安装包 | 已检查浏览器模块能加载，Host 与共享模块进入 tarball，并断言清单从 23 个文件起不再缩水；构建产物和 tarball 不进入 Git |
+| 安装包 | 已检查浏览器模块能加载，Host 与共享模块进入 tarball，并断言清单从 24 个文件起不再缩水；构建产物和 tarball 不进入 Git |
 
 验证使用受控 MCP 和临时文件，不代表所有来源应用的全部版本、全部平台或真实远程服务均已验收。高德示例验证了解析与缺失变量提示，未使用真实高德密钥完成业务调用。
 
