@@ -838,7 +838,7 @@ function Sources({ sources, scanning, scanError, onScan, onImport, onRemove }) {
       const open = expanded[source.id] ?? !!query;
       return <article className={'hub-source ' + (open ? 'expanded' : '')} key={source.id}>
         <div className="hub-source-heading-row">
-          <button className="hub-source-heading" type="button" aria-expanded={open} onClick={() => setExpanded({ ...expanded, [source.id]: !open })}>
+          <button className="hub-source-heading" type="button" aria-label={source.name} aria-expanded={open} onClick={() => setExpanded({ ...expanded, [source.id]: !open })}>
             <Icon name="chevron" className={open ? 'rotated' : ''}/><span className={'hub-source-logo ' + source.id}>{source.id === 'opencode' ? '〈〉' : source.name.slice(0,1)}</span><strong title={source.name}>{source.name}</strong><Badge>{source.candidates.length} 项配置</Badge><code title={source.files.find(file => file.state === 'read')?.path}>{source.files.find(file => file.state === 'read')?.path}</code>
           </button>
           {source.manual && <IconButton icon="trash" label={'移除导入来源 ' + source.name} className="danger" onClick={() => onRemove(source)}/>}
@@ -846,7 +846,7 @@ function Sources({ sources, scanning, scanError, onScan, onImport, onRemove }) {
         {open && <div className="hub-source-content">{candidates.map(candidate => <div className="hub-candidate" key={candidate.id}>
           <span className="hub-candidate-icon"><Icon name="box"/></span>
           <div className="hub-candidate-info"><strong>{candidate.name}</strong><span title={candidate.entry.transport === 'stdio' ? candidate.entry.command : candidate.entry.url}>{candidate.entry.transport === 'stdio' ? '本地命令' : '远程服务'}<i>·</i>{candidate.entry.transport === 'stdio' ? candidate.entry.command : candidate.entry.url}</span>{candidate.detail && <small>项目级 · {candidate.detail}</small>}{candidate.nameConflict && <small className="warn">同名已存在，但配置不同（导出配置时可能省略了凭据）；确认是新服务时请改名添加</small>}{!!candidate.issues.length && <small className="warn">有 {candidate.issues.length} 项配置需要核对</small>}{candidate.duplicateSource && <small>也发现于 {candidate.duplicateSource}</small>}</div>
-          {candidate.duplicate ? <span className="hub-already"><Icon name="check" size={15}/>已添加 · {candidate.duplicate}{candidate.credentialOmitted ? '（凭据未随备份导入）' : ''}</span> : <button className="hub-button" onClick={() => onImport(candidate)}><Icon name="plus" size={16}/>添加</button>}
+          {candidate.duplicate ? <span className="hub-already"><Icon name="check" size={15}/>已添加 · {candidate.duplicate}{candidate.credentialOmitted ? '（凭据未随备份导入）' : ''}</span> : <button className="hub-button" aria-label={'添加 ' + candidate.name} onClick={() => onImport(candidate)}><Icon name="plus" size={16}/>添加</button>}
         </div>)}</div>}
       </article>;
     })}</div>

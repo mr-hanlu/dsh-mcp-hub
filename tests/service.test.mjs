@@ -140,6 +140,24 @@ test('bulk enable verifies the rows it turns back on',async()=>{
   assert.equal(result.verifying,true);
   assert.equal(service.verifications.get('demo').state,'ok');
 });
+test('a candidate whose token is already stored is recognized as the same connection',async()=>{
+  // 同一个服务在各应用里写法不同：一边是 `${env:DOCS_TOKEN}`，另一边已经存成
+  // `${credential:MCPHUB_DOCS_TOKEN}`。只看模板文本会判成两个服务。
+  const {service,store}=fixture({
+    env:{ DOCS_TOKEN:'docs-token-value' },
+    servers:{ mine:{ transport:'streamable-http', url:'https://x.example/mcp', headers:{ Authorization:'Bearer ${credential:MCPHUB_DOCS_TOKEN}' } } },
+  });
+  store.set('DOCS_TOKEN','docs-token-value');
+  store.set('MCPHUB_DOCS_TOKEN','docs-token-value');
+  const candidateEntry={ transport:'streamable-http', url:'https://x.example/mcp', headers:{ Authorization:'Bearer ${env:DOCS_TOKEN}' } };
+  const present=async entry=>(await service.presentSources([{ id:'sim', name:'模拟', files:[], candidates:[{ id:'c1', name:'other', entry, issues:[] }] }])).sources[0].candidates[0];
+  assert.equal((await present(candidateEntry)).duplicate,'mine','同一个 token 应该认成同一个连接');
+  // 明文写法同样要能认出来。
+  assert.equal((await present({ ...candidateEntry, headers:{ Authorization:'Bearer docs-token-value' } })).duplicate,'mine');
+  // 换成别的 token 就不是同一个连接了。
+  store.set('MCPHUB_DOCS_TOKEN','rotated-value');
+  assert.equal((await present(candidateEntry)).duplicate,undefined,'不同 token 不该被合并');
+});
 test('retained cleanup rows are reported as cleanup rather than plugin servers',async()=>{
   const {service}=fixture({extraRows:[{name:'gone',configured:false,status:{state:'failed',reason:'cleanup',result:{closeConfirmed:false,cleanupError:'busy'}}}]});
   const [row]=(await service.list()).servers;

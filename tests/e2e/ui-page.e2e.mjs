@@ -30,7 +30,11 @@ import { existsSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { bootProfile, createProfile, findDsh, skip, sleep } from './support/profile.mjs';
+import { buildSimulatedHome } from './support/simulated-home.mjs';
 
 const repoRoot = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 const fixture = repoRoot + '/tests/manual/echo-server.mjs';
@@ -114,9 +118,16 @@ async function main() {
 
   const { default: puppeteer } = await import('puppeteer-core');
   const profile = await createProfile({ bin, repoRoot });
+  // 假 HOME：让「本地导入」页签里有各应用的真实写法（含明文密钥那条），
+  // 这样页面层也能验证「导入 → 密钥写入 DSH 凭证」。
+  const simHome = await mkdtemp(join(tmpdir(), 'dsh-mcp-hub-ui-home-'));
+  await buildSimulatedHome({
+    root: simHome, stdioFixture: fixture, cwd: repoRoot,
+    authUrl: 'http://127.0.0.1:1/mcp', openUrl: 'http://127.0.0.1:1/mcp',
+  });
   let session, browser;
   try {
-    session = await bootProfile({ bin, profile: profile.name, env: profile.env });
+    session = await bootProfile({ bin, profile: profile.name, env: { ...profile.env, HOME: simHome, SHARED_TOKEN: 'shared-secret-value' } });
     browser = await puppeteer.launch({
       executablePath: CHROME,
       headless: true,
@@ -138,6 +149,7 @@ async function main() {
     assert.equal(await clickLabel(page, '本地导入'), true);
     await waitForText(page, '从其他应用导入已有 MCP', { label: '本地导入页签' });
     step('sources-tab', { ok: true });
+
     assert.equal(await clickLabel(page, '已添加 0'), true);
     await waitForText(page, '连接你的第一个 MCP', { label: '回到已添加' });
 
@@ -343,6 +355,26 @@ async function main() {
     }
     await waitForText(page, '连接你的第一个 MCP', { label: '收尾空状态', timeoutMs: 30000 });
     step('cleanup-extra', { ok: true, count: 0 });
+
+    // ---------- 模拟机器的本地导入 ----------
+    // 假 HOME 里装着各客户端的配置：分组、计数要对，还要能直接导入一条带明文密钥的服务。
+    assert.equal(await clickLabel(page, '本地导入'), true, '找不到「本地导入」');
+    await waitForText(page, '从其他应用导入已有 MCP', { label: '收尾的导入页签' });
+    await waitForText(page, 'Claude Desktop', { label: '来源分组：Claude Desktop', timeoutMs: 30000 });
+    await waitForText(page, /2 项配置/, { label: '来源计数' });
+    assert.equal(await clickLabel(page, 'Codex'), true, '找不到 Codex 分组');
+    await waitForText(page, 'sim-codex-http', { label: 'Codex 的候选' });
+    step('source-groups', { ok: true });
+
+    assert.equal(await clickLabel(page, 'Claude Desktop'), true, '找不到 Claude Desktop 分组');
+    await waitForText(page, 'sim-desktop-plain', { label: 'Claude Desktop 的候选' });
+    assert.equal(await clickLabel(page, '添加 sim-desktop-plain'), true, '找不到来源候选的「添加」');
+    await waitForText(page, '添加 MCP 服务', { label: '来源预填的编辑窗口' });
+    assert.equal(await clickLabel(page, '添加'), true, '编辑窗口里找不到「添加」');
+    await waitForText(page, /sim-desktop-plain 已保存，正在验证连接（密钥已写入 DSH 凭证）/, { label: '来源导入提示', timeoutMs: 30000 });
+    assert.equal(await clickLabel(page, /^已添加 \d+$/), true, '导入后没有回到已添加页签');
+    await waitForText(page, /sim-desktop-plain.*已连接/, { label: '来源导入的服务已连接', timeoutMs: 60000 });
+    step('source-import', { ok: true });
   } catch (error) {
     // 失败时留一张全页截图，CI 的 artifact 能直接看到当时的界面。
     let screenshot = '';
@@ -361,6 +393,7 @@ async function main() {
     if (browser) await browser.close().catch(() => {});
     if (session) await session.stop();
     await profile.cleanup();
+    await rm(simHome, { recursive: true, force: true });
   }
   console.log(JSON.stringify({ ok: true, steps: report }, null, 2));
 }

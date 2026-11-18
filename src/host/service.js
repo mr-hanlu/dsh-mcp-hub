@@ -396,14 +396,46 @@ export class HubService {
     }
     return { value };
   }
+  /**
+   * 重复识别用的连接身份：把 `${credential:…}`、`${env:…}` 解析成真实值再算指纹。
+   *
+   * 只看模板文本会把「各应用里同一个服务」判成不同连接——同一个 token 可能写成
+   * `${DOCS_TOKEN}`、也可能已经存成 `${credential:MCPHUB_DOCS_TOKEN}`，甚至明文。
+   * 解析失败（凭证未配置）就保留模板文本，避免把两个都缺凭证的条目合成一个。
+   * 返回的只是哈希，真实值不会离开 Host。
+   */
+  async resolvedIdentity(entry, provider) {
+    if (!provider?.resolve) return entry;
+    const resolveText = async text => {
+      const names = [...new Set([...text.matchAll(/\$\{credential:([A-Za-z_][A-Za-z0-9_]*)\}/g)].map(match => match[1]))];
+      let out = text;
+      for (const name of names) {
+        try {
+          const found = await provider.resolve(name);
+          if (typeof found?.value === 'string' && found.value) out = out.split('${credential:' + name + '}').join(found.value);
+        } catch { /* 未配置：保持模板，宁可判成不同也不合并 */ }
+      }
+      return out;
+    };
+    const walk = async value => {
+      if (typeof value === 'string') return resolveText(value);
+      if (Array.isArray(value)) return Promise.all(value.map(walk));
+      if (value !== null && typeof value === 'object') return Object.fromEntries(await Promise.all(Object.entries(value).map(async ([key, item]) => [key, await walk(item)])));
+      return value;
+    };
+    return walk(entry);
+  }
   async presentSources(sources) {
     const existing = this.descriptor().value?.servers ?? {};
+    const provider = this.credentialsProvider();
     const existingHashes = new Map();
     const existingSkeletons = new Map();
     for (const [name, entry] of Object.entries(existing)) {
       existingSkeletons.set(name, connectionSkeleton(entry));
-      try { existingHashes.set(connectionFingerprint((await preflight(name, entry, this.preflightOptions())).entry), name); }
-      catch { /* one unreadable stored entry must not break the import list */ }
+      try {
+        const checked = (await preflight(name, entry, this.preflightOptions())).entry;
+        existingHashes.set(connectionFingerprint(await this.resolvedIdentity(checked, provider)), name);
+      } catch { /* one unreadable stored entry must not break the import list */ }
     }
     const all = new Map();
     const presented = [];
@@ -414,7 +446,7 @@ export class HubService {
         let checked, hash;
         try {
           checked = await preflight(candidate.name, candidate.entry, this.preflightOptions());
-          hash = connectionFingerprint(checked.entry);
+          hash = connectionFingerprint(await this.resolvedIdentity(checked.entry, provider));
         } catch (error) {
           candidates.push({ ...candidate, entry: redact(candidate.entry ?? {}), issues: [...new Set([...(candidate.issues ?? []), '无法校验此配置：' + (error?.message ?? '未知错误')])], duplicate: undefined, duplicateSource: undefined, nameConflict: false });
           continue;

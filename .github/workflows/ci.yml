@@ -89,6 +89,11 @@ jobs:
           CHROME_PATH: ${{ vars.DSH_E2E_CHROME_PATH }}
         run: npm run test:ui
 
+      - name: 模拟来源功能验收（假 HOME，各客户端写法 + 密钥）
+        env:
+          DSH_E2E_REQUIRED: '1'
+        run: npm run test:simulated
+
       - name: 布局验收（浅色 / 深色 / 窄窗口）
         env:
           DSH_E2E_REQUIRED: '1'
