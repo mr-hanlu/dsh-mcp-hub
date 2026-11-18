@@ -65,7 +65,7 @@
 
 - [x] 基础流水线：`npm ci` → `npm test` → `npm run check` → `npm run build` → `npm pack --dry-run --json --ignore-scripts` 交给 `scripts/assert-pack.mjs` 断言包内容（`lib/client.js`、`lib/style.css`、`cordis.patch.yml`、`locale/`、`icon.svg`、`src/host`、`src/shared`、`README.md`、`LICENSE`），并断言复审报告不进包。这一层不需要 DSH，公开 runner 即可。
 - [x] 端到端流水线（需要装了 DSH 的机器）：`npm run test:e2e` 与 `npm run test:ui` 串行跑在一个带 `dsh` 标签的自托管 runner 上，由仓库变量 `DSH_E2E_RUNNER=true` 打开（未打开时整个 job 跳过，不会挂起）。CI 里设 `DSH_E2E_REQUIRED=1`，把「找不到 dsh / Chrome」从 SKIP 变成失败——否则 runner 没装 DSH 时会绿灯通过但什么都没测。
-- [x] 判定与产物：脚本的 JSON 报告完整打在作业日志里；`test:ui` 失败时自动把全页截图写到 `tests/e2e/artifacts/ui-failure-*.png`，报告里带 `screenshot` 路径。
+- [x] 判定与产物：脚本的 JSON 报告完整打在作业日志里；`test:ui` 失败时自动把全页截图写到 `tests/e2e/artifacts/ui-failure-*.png`，报告里带 `screenshot` 路径；CI 以 `ui-failure` artifact 上传。
 - [x] 缓存：基础作业用 `setup-node` 的 npm 缓存；自托管 runner 不缓存 `node_modules`，每次 `npm ci` 保证干净。`puppeteer-core` 不下载浏览器，Chrome 由 runner 提供（`DSH_E2E_CHROME_PATH`）。
 
 验收标准：一次干净 clone 后推送即可看到绿灯；失败时能直接定位到步骤；端到端在无人值守下可重复（不依赖开发机现存的 `/tmp`、profile 或 Chrome 用户目录）。

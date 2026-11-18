@@ -88,3 +88,11 @@ jobs:
           DSH_E2E_REQUIRED: '1'
           CHROME_PATH: ${{ vars.DSH_E2E_CHROME_PATH }}
         run: npm run test:ui
+      - name: 保留失败截图
+        # test:ui 失败时把现场页面写到 tests/e2e/artifacts/，这里收进 artifact。
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-failure
+          path: tests/e2e/artifacts/
+          if-no-files-found: ignore
