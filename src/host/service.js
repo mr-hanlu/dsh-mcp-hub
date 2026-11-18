@@ -765,7 +765,10 @@ export class HubService {
     this.cancelVerification(name, '已被新的操作取代');
     // 条目显式声明了更长的启动预算时跟着放宽，避免比官方客户端的超时更早判失败。
     const declared = expected.startupTimeoutMs;
-    const budget = Math.max(this.waitMs, declared ? declared + 20000 : 0);
+    // 首次连接往往要下载 npx 包，45 秒的默认预算不够用；给两倍。已经成功验证过的
+    // 条目按正常预算走，避免每次重连都白白多等一倍。
+    const firstRun = previousConnectedAt === undefined && this.lastVerifications[name]?.state !== 'ok';
+    const budget = Math.max(this.waitMs, declared ? declared + 20000 : 0, firstRun ? this.waitMs * 2 : 0);
     const record = { name, state: 'verifying', expected, previousConnectedAt, startedAt: Date.now(), deadline: Date.now() + budget, detail: undefined };
     this.verifications.set(name, record);
     this.statusWatchers.add(record);
@@ -856,7 +859,12 @@ export class HubService {
         return;
       }
     }
-    record.detail = status?.state === 'reconnecting' ? `第 ${status.attempt ?? 0}/${status.maxAttempts ?? '?'} 次重试` : '正在连接…';
+    // 首次跑 npx 的包要下载依赖，几十秒的「正在连接」是正常的；超过 15 秒后换一句
+    // 解释，避免用户以为卡死而反复保存/重启。
+    const elapsed = Date.now() - record.startedAt;
+    record.detail = status?.state === 'reconnecting'
+      ? `第 ${status.attempt ?? 0}/${status.maxAttempts ?? '?'} 次重试`
+      : elapsed > 15000 ? '正在启动：首次运行可能需要下载依赖或等待网络，请稍候' : '正在连接…';
   }
   /** The stored entry still equals what this verification expects. */
   stillExpected(name, expected) {

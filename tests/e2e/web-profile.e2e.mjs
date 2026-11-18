@@ -145,6 +145,51 @@ async function main() {
     assert.equal(afterStdio.servers.length, baseline.servers.length, '删除后仍在列表里');
     step('remove', { count: afterStdio.servers.length, revision: afterStdio.revision });
 
+    // ---------- 阶段 1.5：启动/发现慢与重连退避 ----------
+    // 首次跑 npx 的包要下载依赖，握手可能明显慢于本地进程；只要在声明的启动预算内
+    // 就该等到成功，而不是按「必须秒连上」判失败。
+    const slowEntry = {
+      transport: 'stdio', command: process.execPath, args: [stdioFixture], cwd: repoRoot,
+      env: { MCP_ECHO_DELAY: '2500' }, startupTimeoutMs: 15000,
+    };
+    const slowTest = await call('/test', { name: 'hubslow', entry: slowEntry });
+    assert.equal(slowTest.body?.ok, true, '慢握手测试失败：' + JSON.stringify(slowTest.body));
+    revision = (await servers()).revision;
+    assert.equal((await call('/mutate', { action: 'save', revision, name: 'hubslow', entry: slowEntry })).body.saved, true);
+    const slowVerified = await waitState('hubslow', row => row?.verification && row.verification.state !== 'verifying', 'slow-verify', 60000);
+    assert.equal(slowVerified.row.verification.state, 'ok', '慢握手验证未通过：' + JSON.stringify(slowVerified.row.verification));
+    assert.ok(slowVerified.ms >= 2500, '慢握手的验证结束得太早（' + slowVerified.ms + ' ms），说明没有真的等到服务完成握手');
+    step('slow-start', { state: 'ok', ms: slowVerified.ms, detail: slowVerified.row.verification.detail });
+    await removeRow('hubslow');
+
+    // 握手很快、工具发现慢：验证必须停在「同步工具」而不是提前判失败。
+    const slowToolsEntry = {
+      transport: 'stdio', command: process.execPath, args: [stdioFixture], cwd: repoRoot,
+      env: { MCP_ECHO_TOOLS_DELAY: '2000' }, startupTimeoutMs: 15000,
+    };
+    revision = (await servers()).revision;
+    assert.equal((await call('/mutate', { action: 'save', revision, name: 'hubtools', entry: slowToolsEntry })).body.saved, true);
+    const slowToolsVerified = await waitState('hubtools', row => row?.verification && row.verification.state !== 'verifying', 'slow-tools-verify', 60000);
+    assert.equal(slowToolsVerified.row.verification.state, 'ok', '慢工具发现验证未通过：' + JSON.stringify(slowToolsVerified.row.verification));
+    assert.ok(slowToolsVerified.ms >= 2000, '工具发现慢时验证结束得太早（' + slowToolsVerified.ms + ' ms）');
+    step('slow-tools', { state: 'ok', ms: slowToolsVerified.ms, detail: slowToolsVerified.row.verification.detail });
+    await removeRow('hubtools');
+
+    // 连上后进程退出：应进入重连退避并暴露第几次重试，而不是直接判「已连接」。
+    const unstableEntry = {
+      transport: 'stdio', command: process.execPath, args: [stdioFixture], cwd: repoRoot,
+      env: { MCP_ECHO_EXIT_AFTER_INIT: '300' },
+    };
+    revision = (await servers()).revision;
+    assert.equal((await call('/mutate', { action: 'save', revision, name: 'hubunstable', entry: unstableEntry })).body.saved, true);
+    const reconnecting = await waitState('hubunstable', row => row?.state === 'reconnecting' && (row.attempt ?? 0) >= 1, 'reconnect', 30000);
+    assert.ok((reconnecting.row.attempt ?? 0) >= 1, '重连状态应带上第几次重试：' + JSON.stringify(reconnecting.row));
+    step('reconnect', { state: 'reconnecting', attempt: reconnecting.row.attempt, maxAttempts: reconnecting.row.maxAttempts });
+    revision = (await servers()).revision;
+    assert.equal((await call('/mutate', { action: 'toggle', revision, name: 'hubunstable', enabled: false })).body.ok, true);
+    await waitState('hubunstable', row => row?.state === 'disabled', 'reconnect-disabled');
+    await removeRow('hubunstable');
+
     // ---------- 阶段 2：Streamable HTTP + 凭证 ----------
     const tokenFile = join(profile.home, 'http-token.txt');
     await writeFile(tokenFile, 'first-token');

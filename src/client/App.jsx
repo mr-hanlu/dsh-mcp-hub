@@ -97,6 +97,9 @@ function StatusNote({ status = {}, verification }) {
   if (verification?.state === 'failed' && status.state !== 'connected') return <span className="hub-note bad" role="alert">{status.state === 'disabled' ? '上次验证未通过：' : ''}{verification.detail || '连接验证未通过'}</span>;
   if (status.state === 'reconnecting' && status.attempt != null) return <span className="hub-note warn">第 {status.attempt}/{status.maxAttempts ?? '?'} 次重试</span>;
   if (status.state === 'waiting-credentials') return <span className="hub-note warn">缺少 DSH 凭证</span>;
+  // 已从配置删除、但进程没退出：官方会保留这行直到宿主重启，必须把原因说清楚，
+  // 否则用户只会看到「已删除，清理中」一直转。
+  if (status.cleanupError) return <span className="hub-note bad" role="alert">清理未完成：{status.cleanupError}；重启 DSH 后会清除</span>;
   if (status.state === 'failed' && status.reason) return <span className="hub-note bad">{REASON[status.reason] ?? status.reason}</span>;
   return null;
 }

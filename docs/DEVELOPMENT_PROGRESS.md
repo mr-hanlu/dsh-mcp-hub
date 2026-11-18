@@ -2,7 +2,7 @@
 
 更新日期：2026-11-18（Asia/Shanghai）
 
-> 收工状态：单测 117 项、`check`、`build`、`test:e2e`（stdio + HTTP + 凭证）、`test:ui`（页面主流程）全部通过；桌面实例已 link 安装并完成第一轮验收。CI 基础流水线与端到端作业已接入；启停后的验证结论已能刷新；密钥已统一写入 DSH 凭证服务，配置只保留引用。下一步是补桌面人工项，见 [后续任务](NEXT_TASKS.md#下一次开发的建议顺序)。
+> 收工状态：单测 118 项、`check`、`build`、`test:e2e`（stdio + 启动/重连边界 + HTTP + 凭证）、`test:ui`（页面主流程）全部通过；桌面实例已 link 安装并完成第一轮验收。CI 基础流水线与端到端作业已接入；启停后的验证结论已能刷新；密钥已统一写入 DSH 凭证服务，配置只保留引用。下一步是补桌面人工项，见 [后续任务](NEXT_TASKS.md#下一次开发的建议顺序)。
 
 ## 当前版本与状态
 
@@ -77,6 +77,19 @@ CI：`.github/workflows/ci.yml` 分两个作业。`checks` 在 `ubuntu-latest` �
 
 - 查看与更换：凭证引用的「显示」改为就地切只读明文（10 秒倒计时、同一时间只一行、Esc/再点收回），新增「复制」和「编辑密钥」；编辑密钥把该行就地切成输入框，先带新值做一次真实连接测试，通过后才写入草稿（失败保留原值并就地提示原因），保存时复用 `planCredentials`（独占原地轮换、共享自动 fork），不新增 Host 接口。
 验证：`npm test` 117 项、`npm run check`、`npm run build`、`npm run test:e2e`、`npm run test:ui` 全部通过。
+
+## 本轮（2026-11-18）：慢启动、慢工具发现与重连退避
+
+这一轮专门验证「真实环境第一次用」的边界：本地 echo fixture 一直秒连，掩盖了下载依赖、网络慢、进程中途退出这几类问题。现在 `tests/manual/echo-server.mjs` 支持用环境变量制造这些场景，`test:e2e` 增加了阶段 1.5。
+
+| 位置 | 处理 |
+| --- | --- |
+| `tests/manual/echo-server.mjs` | 新增 `MCP_ECHO_TOOLS_DELAY`（只放慢 `tools/list`）、`MCP_ECHO_EXIT_AFTER_INIT`（握手成功后主动退出，模拟断线）、`MCP_ECHO_IGNORE_SIGTERM` / `MCP_ECHO_PID_FILE`（清理排查用） |
+| `tests/e2e/web-profile.e2e.mjs` | 新增三步：慢握手 2.5 秒（验证耗时 7.7 秒仍成功）、慢工具发现 2 秒（验证耗时 2.2 秒）、连上后退出（进入 `reconnecting`，`attempt 1/10`，随后停用清理） |
+| `src/host/service.js` | 首次连接（尚无成功验证记录）给两倍等待预算，避免首次 `npx` 下载依赖时被 45 秒默认值误杀；连接超过 15 秒仍停在「正在连接」时，提示「首次运行可能需要下载依赖或等待网络」 |
+| `src/client/App.jsx` | 清理未完成的行在状态行直接显示「清理未完成：<原因>；重启 DSH 后会清除」，不再只有「已删除，清理中」的徽标 |
+
+验证：`npm test` 118 项（新增 1 项首次连接预算）、`npm run check`、`npm run build`、`npm run test:e2e`（23 步）、`npm run test:ui`（16 步）全部通过。
 
 ## 第一轮桌面验收（2026-11-17）
 

@@ -35,6 +35,18 @@ test('schema defaults in the effective entry do not cause a false verification f
   service.ctx.settings.mutate=async(...args)=>{await mutate(...args);Object.assign(form.value.servers.demo,{args:[],env:{},cwd:'',command:'',startupTimeoutMs:30000,reconnect:{enabled:true}});};
   assert.equal((await service.mutate(body)).ok,true);
 });
+test('the first connection gets a longer budget because it may download dependencies',async()=>{
+  const {service}=fixture({waitMs:1000,status:{state:'connecting'}});
+  await service.mutate(body);
+  const first=service.verifications.get('demo');
+  assert.equal(first.state,'verifying');
+  assert.ok(first.deadline-first.startedAt>=2000,'首次连接应给两倍预算，实际 '+(first.deadline-first.startedAt)+' ms');
+  const {service:second}=fixture({waitMs:1000,status:{state:'connecting'},servers:{demo:{...body.entry,enabled:true}}});
+  second.lastVerifications.demo={state:'ok',finishedAt:Date.now()};
+  await second.mutate({...body,originalName:'demo'});
+  const again=second.verifications.get('demo');
+  assert.ok(again.deadline-again.startedAt<2000,'已成功验证过的条目不应再翻倍预算，实际 '+(again.deadline-again.startedAt)+' ms');
+});
 test('editing must not mistake the previous connection for the new generation',async()=>{
   const {service}=fixture({servers:{demo:{...body.entry,url:'https://old.example/mcp',enabled:true}},status:{state:'connected',toolCount:1,connectedAt:123}});
   const result=await service.mutate({...body,originalName:'demo'});
