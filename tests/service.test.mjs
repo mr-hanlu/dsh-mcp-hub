@@ -526,6 +526,15 @@ test('a plaintext secret is moved into the credential store',async()=>{
   assert.equal(store.get('MCPHUB_DEMO_API_KEY'),'abcdefghijklmnopqrstuvwxyz1234');
 });
 
+test('a server-named environment variable does not repeat the server prefix',async()=>{
+  const {service,form,store}=fixture();
+  const entry={...body.entry,env:{AMAP_MAPS_API_KEY:'sk-live-0123456789abcdef'}};
+  const result=await service.mutate({...body,name:'amap-maps',entry});
+  assert.equal(result.ok,true,JSON.stringify(result));
+  assert.equal(form.value.servers['amap-maps'].env.AMAP_MAPS_API_KEY,'${credential:MCPHUB_AMAP_MAPS_API_KEY}');
+  assert.equal(store.get('MCPHUB_AMAP_MAPS_API_KEY'),'sk-live-0123456789abcdef');
+});
+
 test('a name owned by another server gets a suffix instead of being overwritten',async()=>{
   const {service,form,store}=fixture({servers:{other:{...body.entry,headers:{Authorization:'Bearer ${credential:MCPHUB_DEMO_TOKEN}'}}}});
   store.set('MCPHUB_DEMO_TOKEN','theirs');

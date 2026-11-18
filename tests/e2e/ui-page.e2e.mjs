@@ -14,6 +14,7 @@
  *   - 编辑已有服务后保存，编辑器关闭、行内重新验证
  *   - 保存成功后编辑器自动关闭
  *   - 带明文 token 的服务保存后提示「密钥已写入 DSH 凭证」
+ *   - 编辑时对凭证引用点「显示」能通过 Host 读回值
  * 失败时会往 tests/e2e/artifacts/ 留一张全页截图。
  *
  * 用法：npm run test:ui
@@ -112,6 +113,7 @@ async function main() {
     const page = await browser.newPage();
     failurePage = page;
     await page.setViewport({ width: 1280, height: 900 });
+    page.on('pageerror', error => console.error('PAGE-ERROR', error.message));
     await page.goto(session.url, { waitUntil: 'networkidle2', timeout: 60000 });
     await sleep(1500);
 
@@ -218,6 +220,14 @@ async function main() {
     await waitForText(page, /已添加 1 个服务（密钥已写入 DSH 凭证）/, { label: '凭证写入提示', timeoutMs: 30000 });
     await waitForText(page, /uiauth.*已连接/, { label: '凭据化行状态', timeoutMs: 60000 });
     step('credential-save', { ok: true });
+    // 「显示」通过 Host 解析 DSH 凭证，10 秒后自动隐藏。
+    assert.equal(await clickLabel(page, '编辑 uiauth'), true, '凭据化步骤找不到「编辑 uiauth」');
+    await waitForText(page, '编辑 MCP 服务', { label: '凭据化编辑窗口' });
+    assert.equal(await clickLabel(page, '显示'), true, '凭据化步骤找不到「显示」');
+    await waitForText(page, 'sk-live-e2e-0123456789abcdef', { label: '凭证查看', timeoutMs: 15000 });
+    step('credential-reveal', { ok: true });
+    assert.equal(await clickLabel(page, '关闭配置窗口'), true);
+    await waitForText(page, /uiauth/, { label: '凭据化返回列表' });
     assert.equal(await clickLabel(page, '删除 uiauth'), true, '凭据化步骤找不到「删除 uiauth」');
     await waitForText(page, '删除 MCP 服务', { label: '凭据化删除弹窗' });
     assert.equal(await clickLabel(page, '删除'), true);

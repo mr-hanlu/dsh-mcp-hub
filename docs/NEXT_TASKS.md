@@ -62,7 +62,7 @@
 
 ### 6. 接入 CI
 
-`.github/workflows/ci.yml` 已接入；本地基线先跑通（单测 116 项、`check`、`build`、两条端到端、打包清单 21 个文件全部通过）。
+`.github/workflows/ci.yml` 已接入；本地基线先跑通（单测 117 项、`check`、`build`、两条端到端、打包清单 21 个文件全部通过）。
 
 - [x] 基础流水线：`npm ci` → `npm test` → `npm run check` → `npm run build` → `npm pack --dry-run --json --ignore-scripts` 交给 `scripts/assert-pack.mjs` 断言包内容（`lib/client.js`、`lib/style.css`、`cordis.patch.yml`、`locale/`、`icon.svg`、`src/host`、`src/shared`、`README.md`、`LICENSE`），并断言复审报告不进包。这一层不需要 DSH，公开 runner 即可。
 - [x] 端到端流水线（需要装了 DSH 的机器）：`npm run test:e2e` 与 `npm run test:ui` 串行跑在一个带 `dsh` 标签的自托管 runner 上，由仓库变量 `DSH_E2E_RUNNER=true` 打开（未打开时整个 job 跳过，不会挂起）。CI 里设 `DSH_E2E_REQUIRED=1`，把「找不到 dsh / Chrome」从 SKIP 变成失败——否则 runner 没装 DSH 时会绿灯通过但什么都没测。
@@ -131,7 +131,7 @@
 
 ## 下一次开发的建议顺序
 
-截至 2026-11-18：安装、Host 侧验收、`test:e2e`（stdio + HTTP + 凭证）、`test:ui`（页面主流程）、CI、启停后重新验证、密钥统一写入 DSH 凭证服务都已完成；本地基线全绿（单测 116 项、`check`、`build`、两条端到端、打包清单）。
+截至 2026-11-18：安装、Host 侧验收、`test:e2e`（stdio + HTTP + 凭证）、`test:ui`（页面主流程）、CI、启停后重新验证、密钥统一写入 DSH 凭证服务都已完成；本地基线全绿（单测 117 项、`check`、`build`、两条端到端、打包清单）。
 
 1. 复现基线：`npm ci && npm test && npm run check && npm run build`，再**串行**跑 `npm run test:e2e` 与 `npm run test:ui`（各约 1 分钟；两者都默认占 `127.0.0.1:3080`，并行会 EADDRINUSE）。推送后确认 CI 的 checks 作业为绿；要跑端到端按 README「持续集成」挂 runner。
 2. **补 P0-1 剩余的人工项**（主题与窄窗口、重启 DSH 后恢复、凭证缺失 / 凭证服务不可用），这些只能在桌面实例上验；启停后的验证结论已能在诊断页直接核对。

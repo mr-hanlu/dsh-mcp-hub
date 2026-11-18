@@ -166,7 +166,7 @@ function useRowIds() {
   return key => { if (!ids.current.has(key)) ids.current.set(key, 'r' + (++counter.current)); return ids.current.get(key); };
 }
 
-function Pairs({ value = {}, onChange, label, field, variables = [], onReveal }) {
+function Pairs({ value = {}, onChange, label, field, variables = [], onReveal, peeks = {}, onPeek }) {
   const [revealed, setRevealed] = useState({}), [names, setNames] = useState({}), [error, setError] = useState('');
   const idOf = useRowIds();
   const entries = Object.entries(value);
@@ -174,6 +174,11 @@ function Pairs({ value = {}, onChange, label, field, variables = [], onReveal })
   async function show(key, val) {
     setError('');
     try { if (val.includes(MASK)) set(key, await onReveal(field, key)); setRevealed(current => ({...current,[key]:true})); }
+    catch (error) { setError(textError(error)); }
+  }
+  async function peekValue(key) {
+    setError('');
+    try { await onPeek(field, key); }
     catch (error) { setError(textError(error)); }
   }
   async function rename(key, next) {
@@ -190,15 +195,17 @@ function Pairs({ value = {}, onChange, label, field, variables = [], onReveal })
       const kind = ref ? ref[2] === 'credential:' ? 'credential' : 'env' : 'literal';
       const shown = ref ? ref[3] ?? ref[4] : val;
       const info = variables.find(row=>row.field === field && row.key === key);
+      const peek = peeks[field + '/' + key];
       // Written-out secrets deserve the same treatment as fetched ones.
       const secret = kind === 'literal' && (isSecretKey(key) || /^(?:Bearer|Basic|Token)\s/i.test(String(val)));
       return <div className="hub-variable-row" key={idOf(key)}><div className={"hub-pair" + (field === "env" ? " no-mode" : "")}>
         <input aria-label={label+'名称 '+(index+1)} value={names[index] ?? key} placeholder="KEY" onChange={event=>setNames({...names,[index]:event.target.value})} onBlur={event=>rename(key,event.target.value.trim())}/>
         {field !== 'env' && <select aria-label={label+'配置方式 '+(index+1)} value={kind} onChange={event=>set(key,event.target.value==='literal'?'':event.target.value==='env'?defaultPrefix+'${env:}':defaultPrefix+'${credential:}')}><option value="literal">直接填写</option><option value="env">环境变量引用</option><option value="credential">DSH 凭证引用</option></select>}
         <input aria-label={label+'值 '+(index+1)} type={secret&&!revealed[key]?'password':'text'} value={field === 'env' ? (typeof val === 'string' ? val : '') : shown} placeholder={field === 'env' ? '填写值' : kind==='literal'?'填写值':kind==='env'?'例如 GITHUB_TOKEN':'凭证名称'} autoComplete="off" onChange={event=>set(key, field === 'env' ? event.target.value : kind==='literal'?event.target.value:kind==='env'?prefix+'${env:'+event.target.value+'}':prefix+'${credential:'+event.target.value+'}')}/>
+        {kind === 'credential' && <button type="button" className="hub-text-button" onClick={()=>peekValue(key)}>{peek !== undefined ? '隐藏' : '显示'}</button>}
         {secret && <button type="button" className="hub-text-button" onClick={()=>{ if(revealed[key]) { setRevealed({...revealed,[key]:false}); return; } if(String(val).includes(MASK)) { show(key,val); return; } setRevealed({...revealed,[key]:true}); }}>{revealed[key]?'隐藏':'显示'}</button>}
         <IconButton icon="close" label={'移除 '+key} onClick={()=>onChange(Object.fromEntries(entries.filter(([k])=>k!==key)))}/>
-      </div><small className={info?.state==='missing'?'bad':'hub-help'}>{info?.state==='missing'?'找不到引用：'+info.missing.join('、'):info?.source?'已配置（来自 '+info.source+'）':field==='env'&&kind!=='literal'?'当前是引用；改为普通值会按明文保存':kind==='credential'?'由 DSH 凭证服务解析，连接时验证':kind==='env'?'保存为 ${credential:…} 引用，连接时从 DSH 凭证服务读取':String(val).includes(MASK)?'已配置；保持原样将保留原值':val?'已填写':'未填写'}</small></div>;
+      </div><small className={info?.state==='missing'?'bad':'hub-help'}>{peek !== undefined ? <><code className="hub-peek">{peek}</code>（10 秒后隐藏）</> : info?.state==='missing'?'找不到引用：'+info.missing.join('、'):info?.source?'已配置（来自 '+info.source+'）':field==='env'&&kind!=='literal'?'当前是引用；改为普通值会按明文保存':kind==='credential'?'由 DSH 凭证服务解析，连接时验证':kind==='env'?'保存为 ${credential:…} 引用，连接时从 DSH 凭证服务读取':String(val).includes(MASK)?'已配置；保持原样将保留原值':val?'已填写':'未填写'}</small></div>;
     })}
     {!entries.length && <p className="hub-help">没有额外的{label}。</p>}{error && <p className="bad" role="alert">{error}</p>}
   </div>;
@@ -296,6 +303,7 @@ function Editor({ draft, request, revision, reloadRevision, onClose, onSaved, ex
   const [tests, setTests] = useState({});
   const [accepted, setAccepted] = useState({});
   const [mode, setMode] = useState(draft.initialMode ?? (draft.originalName || draft.candidateId ? 'form' : 'json'));
+  const [peeks, setPeeks] = useState({});
   const [busy, setBusy] = useState(false);
   const [testingAll, setTestingAll] = useState(false);
   const [testingRow, setTestingRow] = useState('');
@@ -569,6 +577,15 @@ function Editor({ draft, request, revision, reloadRevision, onClose, onSaved, ex
       return result.value;
     } finally { setReading(count => count - 1); }
   }
+  /** Credential values stay in parent state so a row re-render cannot drop them. */
+  async function peek(field, key) {
+    const id = field + '/' + key;
+    if (peeks[id] !== undefined) { setPeeks(current => { const next = { ...current }; delete next[id]; return next; }); return; }
+    const value = await reveal(field, key);
+    if (typeof value !== 'string') return;
+    setPeeks(current => ({ ...current, [id]: value }));
+    setTimeout(() => setPeeks(current => { if (current[id] !== value) return current; const next = { ...current }; delete next[id]; return next; }), 10000);
+  }
   const transport = formEntry.transport;
   const jsonPassed = jsonAddRows.filter(rowReady).length;
   const jsonSummary = [
@@ -650,8 +667,8 @@ function Editor({ draft, request, revision, reloadRevision, onClose, onSaved, ex
             <label className="hub-field">启动命令<input value={formEntry.command ?? ''} onChange={event => edit('command', event.target.value)} placeholder="npx、uvx 或可执行文件的绝对路径"/></label>
             <Arguments value={formEntry.args} onChange={value => edit('args', value)} onReveal={reveal}/>
             <label className="hub-field">工作目录 <span className="hub-optional">可选</span><input value={formEntry.cwd ?? ''} onChange={event => edit('cwd', event.target.value)} placeholder="留空由 DSH 决定"/><small>本地命令的运行目录；命令或参数使用相对路径时填写，例如项目根目录。留空则继承 DSH 当前目录。</small></label>
-            <Pairs label="环境变量" field="env" value={formEntry.env} variables={formVariables} onReveal={reveal} onChange={value => edit('env', value)}/>
-          </> : <><label className="hub-field">服务地址<input value={formEntry.url ?? ''} onChange={event => edit('url', event.target.value)} placeholder="https://example.com/mcp"/><small>地址中的凭证已隐藏，修改地址时请填写完整新地址。</small></label><Pairs label="请求头" field="headers" value={formEntry.headers} variables={formVariables} onReveal={reveal} onChange={value => edit('headers', value)}/></>}
+            <Pairs label="环境变量" field="env" value={formEntry.env} variables={formVariables} onReveal={reveal} peeks={peeks} onPeek={peek} onChange={value => edit('env', value)}/>
+          </> : <><label className="hub-field">服务地址<input value={formEntry.url ?? ''} onChange={event => edit('url', event.target.value)} placeholder="https://example.com/mcp"/><small>地址中的凭证已隐藏，修改地址时请填写完整新地址。</small></label><Pairs label="请求头" field="headers" value={formEntry.headers} variables={formVariables} onReveal={reveal} peeks={peeks} onPeek={peek} onChange={value => edit('headers', value)}/></>}
           {!!formIssues.length && <div className="hub-compatibility"><strong>有配置需要核对</strong><ul>{formIssues.map(issue => <li key={issue}>{issue}</li>)}</ul><label><input type="checkbox" checked={formAccept} onChange={event => setFormAccept(event.target.checked)}/>我已核对，确认不迁移上述不支持的字段</label></div>}
         </>}
       </fieldset>

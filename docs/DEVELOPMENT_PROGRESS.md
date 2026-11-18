@@ -2,7 +2,7 @@
 
 更新日期：2026-11-18（Asia/Shanghai）
 
-> 收工状态：单测 116 项、`check`、`build`、`test:e2e`（stdio + HTTP + 凭证）、`test:ui`（页面主流程）全部通过；桌面实例已 link 安装并完成第一轮验收。CI 基础流水线与端到端作业已接入；启停后的验证结论已能刷新；密钥已统一写入 DSH 凭证服务，配置只保留引用。下一步是补桌面人工项，见 [后续任务](NEXT_TASKS.md#下一次开发的建议顺序)。
+> 收工状态：单测 117 项、`check`、`build`、`test:e2e`（stdio + HTTP + 凭证）、`test:ui`（页面主流程）全部通过；桌面实例已 link 安装并完成第一轮验收。CI 基础流水线与端到端作业已接入；启停后的验证结论已能刷新；密钥已统一写入 DSH 凭证服务，配置只保留引用。下一步是补桌面人工项，见 [后续任务](NEXT_TASKS.md#下一次开发的建议顺序)。
 
 ## 当前版本与状态
 
@@ -59,7 +59,7 @@ CI：`.github/workflows/ci.yml` 分两个作业。`checks` 在 `ubuntu-latest` �
 
 页面层同时补了两条分支：连接测试进行中原本把「测试全部」按钮整个撤掉，进度文案是死代码；现在按钮保留并显示「测试中 n/m」，旁边是「取消测试」。`test:ui` 增加测试进度/取消、重名跳过、连接失败原因、缺失环境变量、保存后关闭、编辑已有服务六步，失败写全页截图；`tests/manual/echo-server.mjs` 支持 `MCP_ECHO_DELAY` 放慢握手，保证取消有可点的窗口。
 
-验证：`npm test`、`npm run check`、`npm run build`、`npm run test:e2e`、`npm run test:ui`（15 步）全部通过。
+验证：`npm test`、`npm run check`、`npm run build`、`npm run test:e2e`、`npm run test:ui`（16 步）全部通过。
 
 ## 本轮（2026-11-18）：密钥统一写入 DSH 凭证服务
 
@@ -73,9 +73,9 @@ CI：`.github/workflows/ci.yml` 分两个作业。`checks` 在 `ubuntu-latest` �
 | `reveal` / `exportBackup` | 都改为异步：`reveal` 通过凭证服务解析引用（不再只能读遮蔽值）；导出含密钥时把引用解析为明文，未配置的凭证名记入 `credentialsMissing`；不含密钥时保留引用模板 |
 | `src/client/App.jsx` + `i18n.js` | 保存/导入成功后内联提示「已写入 DSH 凭证：…」，不弹窗；导出选项说明区分「保留引用」与「解析为明文」；导出时提示未配置的凭证数量 |
 | 配置项 | `referenceStorage` 标记废弃，仅为兼容旧 profile 保留 |
-| `tests/service.test.mjs` | fixture 增加凭证服务替身（内存 Map）；新增 10 项：明文 header/env 入库、他服务占用名字加后缀、独占轮换、共享不覆盖、用户自定名保持、reveal 解析与缺失报错、导出含/不含密钥、draft 缺变量、args 与 URL 查询参数凭证化、批量导入同一环境变量各存一份（单测 106 → 116） |
+| `tests/service.test.mjs` | fixture 增加凭证服务替身（内存 Map）；新增 11 项：明文 header/env 入库、他服务占用名字加后缀、独占轮换、共享不覆盖、用户自定名保持、reveal 解析与缺失报错、导出含/不含密钥、draft 缺变量、args 与 URL 查询参数凭证化、批量导入同一环境变量各存一份（单测 106 → 117） |
 
-验证：`npm test` 116 项、`npm run check`、`npm run build`、`npm run test:e2e`、`npm run test:ui` 全部通过。
+验证：`npm test` 117 项、`npm run check`、`npm run build`、`npm run test:e2e`、`npm run test:ui` 全部通过。
 
 ## 第一轮桌面验收（2026-11-17）
 

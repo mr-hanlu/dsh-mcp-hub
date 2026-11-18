@@ -56,6 +56,9 @@ export function defaultName(server, key) {
   const suffix = '_' + field;
   const room = MAX_NAME_LENGTH - VAULT_PREFIX.length - suffix.length;
   const serverPart = namePart(server).slice(0, Math.max(1, room));
+  // Environment variables such as AMAP_MAPS_API_KEY already name their app; do
+  // not repeat the server name inside the generated credential name.
+  if (field === serverPart || field.startsWith(serverPart + '_')) return clip(VAULT_PREFIX + field);
   return clip(VAULT_PREFIX + serverPart + suffix);
 }
 
