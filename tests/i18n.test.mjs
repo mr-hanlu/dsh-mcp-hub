@@ -11,6 +11,10 @@ test('English locale translates exact and dynamic messages', () => {
   assert.equal(translate('第 2/5 次重试'), 'Attempt 2/5');
   assert.equal(translate('无法解析此服务器配置：配置字段 env 必须是字符串键值对象'), 'Could not parse this server configuration: The env field must be an object of string values');
   assert.equal(translate('正在加载更多…'), 'Loading more…');
+  assert.equal(translate('更新于 '), 'Updated ');
+  assert.equal(translate('同步最新版本'), 'Sync latest');
+  assert.equal(translate('测试中 2/5'), 'Testing 2/5');
+  assert.equal(translate('将写入 DSH 的配置（2 处与来源不同）'), 'Configuration to write to DSH (2 differences from the source)');
 });
 
 test('Chinese is kept and other locales fall back to English', () => {

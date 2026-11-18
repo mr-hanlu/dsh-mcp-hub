@@ -270,6 +270,7 @@ const EN = {
   '测试连接': 'Test connection',
   '没有可添加': 'Nothing to add',
   '添加': 'Add',
+  '同步最新版本': 'Sync latest',
   '保存': 'Save',
   '保存中…': 'Saving…',
   '测试全部': 'Test all',
@@ -492,6 +493,7 @@ const DYNAMIC = [
   [/^将写入 DSH 的配置（(\d+) 处与来源不同）$/, 'Configuration to write to DSH ($1 differences from the source)'],
   [/^另有 (\d+) 处差异，见下方完整配置。$/, '$1 more differences; see the full configuration below.'],
   [/^已测试 (\d+)\/(\d+)$/, '(tested $1/$2)'],
+  [/^测试中 (\d+)\/(\d+)$/, 'Testing $1/$2'],
 ];
 
 let active = 'zh';

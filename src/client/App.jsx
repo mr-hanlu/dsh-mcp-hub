@@ -593,7 +593,7 @@ function Editor({ draft, request, revision, reloadRevision, onClose, onSaved, ex
       {draft.source && <div className="hub-source-note"><Icon name="import"/><div>从 {draft.source} 导入<code title={draft.sourcePath}>{draft.sourcePath}</code><small>{draft.detail ? '项目级配置 · ' + draft.detail : '配置复制到 DSH 后独立管理'}</small></div></div>}
       {willWrite && (() => {
         const rows = draft.sourcePath ? diffRows(draft.entry ?? {}, willWrite) : [];
-        return <details className="hub-willwrite"><summary>将写入 DSH 的配置{rows.length ? `（${rows.length} 处与来源不同）` : ''}</summary>
+        return <details className="hub-willwrite"><summary>{rows.length ? `将写入 DSH 的配置（${rows.length} 处与来源不同）` : '将写入 DSH 的配置'}</summary>
           {rows.length > 0 && <ul>{rows.slice(0, 12).map(row => <li key={row.path}><code>{row.path}</code><span>{showValue(row.from)} → {showValue(row.to)}</span></li>)}</ul>}
           {rows.length > 12 && <p className="hub-help">另有 {rows.length - 12} 处差异，见下方完整配置。</p>}
           <pre>{JSON.stringify(willWrite, null, 2)}</pre>
@@ -856,7 +856,7 @@ function CatalogDialog({ item, request, onClose }) {
       {loading && <p className="hub-help" role="status"><i className="hub-spinner"/>正在读取服务详情…</p>}
       {error && <div className="hub-banner bad" role="alert"><Icon name="info"/><span>{error}</span><button className="hub-text-button" onClick={() => { setDetail(null); setLoading(true); setError(''); request('/catalog-detail', { name: item.name }).then(setDetail).catch(next => setError(textError(next))).finally(() => setLoading(false)); }}>重试</button></div>}
       {!loading && install && <>
-        {install.version && <p className="hub-help">版本 <code>{install.version}</code>{item.websiteUrl && <> · <a href={item.websiteUrl} target="_blank" rel="noopener noreferrer">官网</a></>}{install.repository && <> · <a href={install.repository} target="_blank" rel="noopener noreferrer">仓库</a></>}{item.updatedAt && <> · 更新于 <time dateTime={item.updatedAt}>{formatDate(item.updatedAt)}</time></>}</p>}
+        {install.version && <p className="hub-help">版本 <code>{install.version}</code>{item.websiteUrl && <> · <a href={item.websiteUrl} target="_blank" rel="noopener noreferrer">官网</a></>}{install.repository && <> · <a href={install.repository} target="_blank" rel="noopener noreferrer">仓库</a></>}{item.updatedAt && <> · {'更新于 '}<time dateTime={item.updatedAt}>{formatDate(item.updatedAt)}</time></>}</p>}
         {item.description && <p className="hub-catalog-description">{item.description}</p>}
         {!!install.warnings.length && <div className="hub-banner warn" role="alert"><Icon name="info"/><span>{[...new Set(install.warnings)].join('；')}</span></div>}
         {!!install.unsupported.length && <div className="hub-banner warn" role="alert"><Icon name="info"/><span>{install.unsupported.join('；')}</span></div>}
