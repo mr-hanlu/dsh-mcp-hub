@@ -138,11 +138,11 @@ function ExportDialog({ busy, error, onCancel, onExport }) {
       <div className="hub-export-options">
         <label className="hub-export-option">
           <input type="radio" name="hub-export-secrets" checked={!includeSecrets} onChange={() => setIncludeSecrets(false)} disabled={busy}/>
-          <span><strong>不包含密钥</strong><small>适合分享给他人或做通用备份。env、headers、URL 中的凭据会被省略，恢复后需要重新填写。</small></span>
+          <span><strong>不包含密钥</strong><small>适合分享给他人或做通用备份。凭据只保留 $&#123;credential:…&#125; 引用，换一台机器后需要配置同名凭证。</small></span>
         </label>
         <label className="hub-export-option">
           <input type="radio" name="hub-export-secrets" checked={includeSecrets} onChange={() => setIncludeSecrets(true)} disabled={busy}/>
-          <span><strong>同时导出密钥</strong><small>适合迁移到自己的另一台电脑。凭据会以明文写入 JSON，请只保存在可信位置，不要分享这份文件。</small></span>
+          <span><strong>同时导出密钥</strong><small>适合迁移到自己的另一台电脑。引用会解析为当前值并以明文写入 JSON，请只保存在可信位置，不要分享这份文件。</small></span>
         </label>
       </div>
       {includeSecrets && <div className="hub-banner warn" role="alert"><Icon name="info"/><span>导出文件将包含明文密钥。发送或上传前请确认接收方可信。</span></div>}
@@ -1089,8 +1089,9 @@ export function App({ request = apiRequest, preview = false, locale }) {
     }
     setBusy(server.name); setError(''); setDeleteError(''); setNotice(null);
     try {
-      await request('/mutate', { action, name: server.name, revision: data.revision, enabled: server.entry?.enabled === false });
+      const result = await request('/mutate', { action, name: server.name, revision: data.revision, enabled: server.entry?.enabled === false });
       await refresh(true); setConfirm(null);
+      if (action === 'remove' && result.cleanup?.length) notify(`已删除 ${server.name}；${result.cleanup.length} 个凭证已无引用，可在 DSH 凭证管理中清理`, 'muted');
     } catch (error) { if(action === 'remove')setDeleteError(textError(error));else setError(textError(error)); }
     finally { setBusy(''); }
   }
@@ -1116,7 +1117,8 @@ export function App({ request = apiRequest, preview = false, locale }) {
       download('mcp-hub-backup-' + new Date().toISOString().slice(0, 10) + suffix + '.json', JSON.stringify({ format: 'dsh-mcp-hub-backup', version: 1, exportedAt: new Date().toISOString(), servers: result.backup }, null, 2));
       setExportOpen(false);
       const omitted = result.omitted?.length ?? 0;
-      if (includeSecrets) notify(`已导出 ${count} 个服务（包含密钥），请妥善保管`, 'warn');
+      const unresolved = result.credentialsMissing?.length ?? 0;
+      if (includeSecrets) notify(unresolved ? `已导出 ${count} 个服务；${unresolved} 个凭证未配置，仍以引用形式导出` : `已导出 ${count} 个服务（包含密钥），请妥善保管`, 'warn');
       else notify(omitted ? `已导出 ${count} 个服务；${omitted} 个凭据字段未导出，恢复后需重新填写` : `已导出 ${count} 个服务`);
     } catch (error) { setExportError(textError(error)); }
     finally { setExportBusy(false); }
@@ -1148,14 +1150,16 @@ export function App({ request = apiRequest, preview = false, locale }) {
       const count = names.length;
       const label = count > 1 ? `${count} 个 MCP 服务` : (names[0] ?? '服务');
       const verifying = Array.isArray(result.verifying) ? result.verifying.length > 0 : Boolean(result.verifying);
+      const secrets = result.credentials?.stored?.length ? '（密钥已写入 DSH 凭证）' : '';
       if (batch) {
         setDraft(null);
         showUndo(result.batchId, result.imported ?? names);
       } else if (result.ok || result.draft) {
         setDraft(null);
-        notify(result.draft ? label + ' 已保存，保持停用' : verifying ? label + ' 已保存，正在验证连接' : label + ' 已保存', result.draft ? 'muted' : 'good');
+        notify(result.draft ? label + ' 已保存，保持停用' + secrets : verifying ? label + ' 已保存，正在验证连接' + secrets : label + ' 已保存' + secrets, result.draft ? 'muted' : 'good');
       }
-      if(result.warnings?.length) setError(result.warnings.join('；'));
+      const warnings = (result.warnings ?? []).filter(item => !String(item).startsWith('已写入 DSH 凭证：'));
+      if(warnings.length) setError(warnings.join('；'));
       return next;
     }}/>}
   </main>;

@@ -3,15 +3,24 @@ import assert from 'node:assert/strict';
 import { HubService } from '../src/host/service.js';
 import { createHandler, apply } from '../src/host/index.js';
 import { HubError } from '../src/shared/errors.js';
-function fixture({ status = {state:'connected',toolCount:1}, schemas = [{name:'mcp__demo__read',parameters:{type:'object'}}], servers = {}, base = {}, waitMs = 8, env = { MCP_HUB_TEST_TOKEN: 'test-value' }, extraRows = [], metaPath = null } = {}) {
+function fixture({ status = {state:'connected',toolCount:1}, schemas = [{name:'mcp__demo__read',parameters:{type:'object'}}], servers = {}, base = {}, waitMs = 8, env = { MCP_HUB_TEST_TOKEN: 'test-value' }, extraRows = [], metaPath = null, credentials = null } = {}) {
   const form={ns:'mcp-manager',revision:1,value:{servers},base:{servers:base}};
   const writes=[];
+  // Credential service stand-in: the Host resolves `${credential:…}` through it,
+  // so the fixture must provide the same seam the real plugin gets.
+  const store = new Map();
+  const credentialsService = credentials ?? {
+    describe: ref => ({ configured: store.has(ref), writable: true, source: store.has(ref) ? 'file' : undefined }),
+    resolve: ref => (store.has(ref) ? { value: store.get(ref), source: 'file' } : undefined),
+    set: async (ref, value) => { if (!value) throw new Error('empty credential'); store.set(ref, value); },
+    unset: async ref => { store.delete(ref); },
+  };
   const ctx={settings:{describe:()=>[structuredClone(form)],mutate:async(ns,ops,revision)=>{
     assert.equal(ns,form.ns);assert.equal(revision,form.revision);writes.push(ops);
     for(const op of ops){const name=op.path[1];if(op.op==='unset')delete form.value.servers[name];else if(op.path.length===2)form.value.servers[name]=op.value;else form.value.servers[name][op.path[2]]=op.value;}
     form.revision++;
-  }},mcpManager:{list:()=>[...Object.keys(form.value.servers).map(name=>({name,status,configured:true})),...extraRows],restart:async()=>{}},tools:{schemas:()=>schemas}};
-  return {service:new HubService(ctx,{metaPath,waitMs,intervalMs:1,env}),form,writes};
+  }},mcpManager:{list:()=>[...Object.keys(form.value.servers).map(name=>({name,status,configured:true})),...extraRows],restart:async()=>{}},tools:{schemas:()=>schemas},credentials:credentialsService};
+  return {service:new HubService(ctx,{metaPath,waitMs,intervalMs:1,env}),form,writes,store,credentials:credentialsService};
 }
 const body={action:'save',name:'demo',entry:{transport:'streamable-http',url:'https://example.com/mcp',headers:{}},revision:1};
 const settle = (ms = 40) => new Promise(resolve => setTimeout(resolve, ms));
@@ -174,6 +183,21 @@ test('batch import writes every new service in one revision and skips existing n
   const listed=(await service.list()).servers.find(row=>row.name==='alpha');
   assert.equal(listed.entry.enabled,true);assert.equal(listed.editable,true);
 });
+test('a batch import gives each service its own copy of a shared environment variable',async()=>{
+  const {service,store}=fixture({env:{SHARED_TOKEN:'shared-value'}});
+  const entry=name=>({transport:'streamable-http',url:'https://'+name+'.example/mcp',headers:{Authorization:'Bearer ${env:SHARED_TOKEN}'}});
+  const result=await service.mutate({action:'import',revision:1,entries:[
+    {name:'alpha',entry:entry('alpha')},
+    {name:'beta',entry:entry('beta')},
+  ]});
+  assert.equal(result.ok,true);
+  assert.deepEqual(result.credentials.stored.map(item=>item.name).sort(),['MCPHUB_SHARED_TOKEN','MCPHUB_SHARED_TOKEN_2']);
+  assert.equal(store.get('MCPHUB_SHARED_TOKEN'),'shared-value');
+  assert.equal(store.get('MCPHUB_SHARED_TOKEN_2'),'shared-value');
+  const listed=(await service.list()).servers;
+  assert.equal(listed.find(row=>row.name==='alpha').entry.headers.Authorization,'Bearer ${credential:MCPHUB_SHARED_TOKEN}');
+  assert.equal(listed.find(row=>row.name==='beta').entry.headers.Authorization,'Bearer ${credential:MCPHUB_SHARED_TOKEN_2}');
+});
 test('undoing a batch removes only the entries the batch still owns',async()=>{
   const {service,form,writes}=fixture();
   const first=await service.mutate({action:'import',revision:1,entries:[
@@ -215,8 +239,8 @@ test('only a manually imported source can be removed',async()=>{
 test('explicit reveal reads exactly the selected value and subsequent edits restore the latest saved value',async()=>{
   const entry={...body.entry,headers:{Authorization:'old-token'}};
   const {service,form}=fixture({servers:{demo:entry}});
-  assert.deepEqual(service.reveal({originalName:'demo',field:'headers',key:'Authorization'}),{value:'old-token'});
-  assert.throws(()=>service.reveal({originalName:'demo',field:'command',key:'x'}),/不支持/);
+  assert.deepEqual(await service.reveal({originalName:'demo',field:'headers',key:'Authorization'}),{value:'old-token'});
+  await assert.rejects(()=>service.reveal({originalName:'demo',field:'command',key:'x'}),/不支持/);
   form.value.servers.demo.headers.Authorization='new-token';
   assert.equal(service.draft({originalName:'demo',entry:{...entry,headers:{Authorization:'••••••••'}}},form.value.servers).entry.headers.Authorization,'new-token');
 });
@@ -297,11 +321,13 @@ test('failures carry structured codes for the client',async()=>{
   await assert.rejects(service.mutate(body),error=>error.code==='NAME_TAKEN');
   await assert.rejects(service.mutate({action:'remove',name:'demo',revision:1}),error=>error.code==='INHERITED_ROW');
 });
-test('saved entries keep references as credential templates',async()=>{
-  const {service,form}=fixture();
+test('saved references are moved into the credential store and rewritten',async()=>{
+  const {service,form,store}=fixture();
   const result=await service.mutate({...body,entry:{...body.entry,headers:{Authorization:'Bearer ${env:MCP_HUB_TEST_TOKEN}'}}});
   assert.equal(result.ok,true,JSON.stringify(result));
-  assert.equal(form.value.servers.demo.headers.Authorization,'Bearer ${credential:MCP_HUB_TEST_TOKEN}');
+  assert.equal(form.value.servers.demo.headers.Authorization,'Bearer ${credential:MCPHUB_MCP_HUB_TEST_TOKEN}');
+  assert.equal(store.get('MCPHUB_MCP_HUB_TEST_TOKEN'),'test-value');
+  assert.deepEqual(result.credentials.stored.map(item=>({name:item.name,mode:item.mode})),[{name:'MCPHUB_MCP_HUB_TEST_TOKEN',mode:'create'}]);
 });
 test('renaming writes the new and old key in one revision',async()=>{
   const {service,form,writes}=fixture({servers:{demo:{...body.entry,enabled:true}},status:{state:'connected',toolCount:1,connectedAt:5}});
@@ -344,7 +370,7 @@ test('single restart is idempotent and needs no matching revision',async()=>{
 test('save reports the redacted entry that was written',async()=>{
   const {service}=fixture();
   const result=await service.mutate({...body,entry:{...body.entry,headers:{Authorization:'Bearer ${env:MCP_HUB_TEST_TOKEN}'}}});
-  assert.equal(result.entry.headers.Authorization,'Bearer ${credential:MCP_HUB_TEST_TOKEN}');
+  assert.equal(result.entry.headers.Authorization,'Bearer ${credential:MCPHUB_MCP_HUB_TEST_TOKEN}');
   service.cancelVerification('demo');
 });
 
@@ -483,4 +509,101 @@ test('an existing entry can be re-probed without touching the live instance', as
   const failed=await service.probeExisting({name:'demo'});
   assert.equal(failed.ok,false);
   assert.match(failed.checks[0].detail,/incomplete/);
+});
+
+// ---- credential vault integration -----------------------------------------
+
+const TOKEN='sk-live-1234567890abcdef';
+const bearer = token => 'Bearer ' + token;
+
+test('a plaintext secret is moved into the credential store',async()=>{
+  const {service,form,store}=fixture();
+  const result=await service.mutate({...body,entry:{...body.entry,headers:{Authorization:bearer(TOKEN)},env:{API_KEY:'abcdefghijklmnopqrstuvwxyz1234'}}});
+  assert.equal(result.ok,true,JSON.stringify(result));
+  assert.equal(form.value.servers.demo.headers.Authorization,'Bearer ${credential:MCPHUB_DEMO_TOKEN}');
+  assert.equal(form.value.servers.demo.env.API_KEY,'${credential:MCPHUB_DEMO_API_KEY}');
+  assert.equal(store.get('MCPHUB_DEMO_TOKEN'),TOKEN);
+  assert.equal(store.get('MCPHUB_DEMO_API_KEY'),'abcdefghijklmnopqrstuvwxyz1234');
+});
+
+test('a name owned by another server gets a suffix instead of being overwritten',async()=>{
+  const {service,form,store}=fixture({servers:{other:{...body.entry,headers:{Authorization:'Bearer ${credential:MCPHUB_DEMO_TOKEN}'}}}});
+  store.set('MCPHUB_DEMO_TOKEN','theirs');
+  const result=await service.mutate({...body,entry:{...body.entry,headers:{Authorization:bearer(TOKEN)}}});
+  assert.equal(result.ok,true,JSON.stringify(result));
+  assert.equal(form.value.servers.demo.headers.Authorization,'Bearer ${credential:MCPHUB_DEMO_TOKEN_2}');
+  assert.equal(store.get('MCPHUB_DEMO_TOKEN'),'theirs');
+  assert.equal(store.get('MCPHUB_DEMO_TOKEN_2'),TOKEN);
+});
+
+test('a name used only by this server is rotated in place',async()=>{
+  const entry={...body.entry,headers:{Authorization:'Bearer ${credential:MCPHUB_DEMO_TOKEN}'}};
+  const {service,form,store}=fixture({servers:{demo:entry}});
+  store.set('MCPHUB_DEMO_TOKEN','old-value');
+  const result=await service.mutate({...body,originalName:'demo',entry:{...body.entry,headers:{Authorization:'Bearer '+TOKEN}}});
+  assert.equal(result.ok,true,JSON.stringify(result));
+  assert.equal(form.value.servers.demo.headers.Authorization,'Bearer ${credential:MCPHUB_DEMO_TOKEN}');
+  assert.equal(store.get('MCPHUB_DEMO_TOKEN'),TOKEN);
+});
+
+test('a name shared by several servers is never overwritten',async()=>{
+  const shared={...body.entry,headers:{Authorization:'Bearer ${credential:MCPHUB_DEMO_TOKEN}'}};
+  const {service,form,store}=fixture({servers:{one:shared,two:{...shared,url:'https://two.example/mcp'}}});
+  store.set('MCPHUB_DEMO_TOKEN','shared-value');
+  const result=await service.mutate({...body,entry:{...body.entry,headers:{Authorization:'Bearer '+TOKEN}}});
+  assert.equal(result.ok,true,JSON.stringify(result));
+  assert.equal(form.value.servers.demo.headers.Authorization,'Bearer ${credential:MCPHUB_DEMO_TOKEN_2}');
+  assert.equal(store.get('MCPHUB_DEMO_TOKEN'),'shared-value');
+});
+
+test('an existing credential reference is kept untouched',async()=>{
+  const entry={...body.entry,headers:{Authorization:'Bearer ${credential:USER_CHOSEN_NAME}'}};
+  const {service,form,store}=fixture();
+  store.set('USER_CHOSEN_NAME','picked');
+  const result=await service.mutate({...body,entry});
+  assert.equal(result.ok,true,JSON.stringify(result));
+  assert.equal(form.value.servers.demo.headers.Authorization,'Bearer ${credential:USER_CHOSEN_NAME}');
+  assert.equal(result.credentials,undefined);
+});
+
+test('reveal resolves a credential reference without touching the configuration',async()=>{
+  const entry={...body.entry,headers:{Authorization:'Bearer ${credential:MCPHUB_DEMO_TOKEN}'}};
+  const {service,store}=fixture({servers:{demo:entry}});
+  store.set('MCPHUB_DEMO_TOKEN',TOKEN);
+  const revealed=await service.reveal({originalName:'demo',field:'headers',key:'Authorization'});
+  assert.equal(revealed.value,'Bearer '+TOKEN);
+  assert.deepEqual(revealed.names,['MCPHUB_DEMO_TOKEN']);
+  store.delete('MCPHUB_DEMO_TOKEN');
+  await assert.rejects(()=>service.reveal({originalName:'demo',field:'headers',key:'Authorization'}),/凭证未配置/);
+});
+
+test('export inlines credentials only when secrets are requested',async()=>{
+  const entry={...body.entry,headers:{Authorization:'Bearer ${credential:MCPHUB_DEMO_TOKEN}'}};
+  const {service,store}=fixture({servers:{demo:entry}});
+  store.set('MCPHUB_DEMO_TOKEN',TOKEN);
+  const safe=await service.exportBackup({});
+  // A reference-only export keeps the template (and is unusable elsewhere until resolved).
+  assert.equal(safe.backup.demo.headers.Authorization,'Bearer ${credential:MCPHUB_DEMO_TOKEN}');
+  const full=await service.exportBackup({includeSecrets:true});
+  assert.equal(full.backup.demo.headers.Authorization,'Bearer '+TOKEN);
+  assert.deepEqual(full.credentialsMissing,[]);
+});
+
+test('a draft save with a missing variable keeps the reference and reports it',async()=>{
+  const {service,form}=fixture();
+  const result=await service.mutate({...body,mode:'draft',entry:{...body.entry,headers:{Authorization:'Bearer ${env:MCP_HUB_MISSING_TEST}'}}});
+  assert.equal(result.saved,true);
+  assert.equal(result.draft,true);
+  assert.deepEqual(result.credentials.missing,['MCP_HUB_MISSING_TEST']);
+  assert.equal(form.value.servers.demo.headers.Authorization,'Bearer ${credential:MCP_HUB_MISSING_TEST}');
+});
+
+test('secret args and url query parameters are credentialised',async()=>{
+  const {service,form,store}=fixture();
+  const entry={...body.entry,url:'https://example.com/mcp?token='+TOKEN,args:['--api-key='+TOKEN]};
+  const result=await service.mutate({...body,entry});
+  assert.equal(result.ok,true,JSON.stringify(result));
+  assert.equal(form.value.servers.demo.args[0],'--api-key=${credential:MCPHUB_DEMO_API_KEY}');
+  assert.match(form.value.servers.demo.url,/\?token=\$\{credential:MCPHUB_DEMO_TOKEN\}/);
+  assert.equal(store.get('MCPHUB_DEMO_TOKEN'),TOKEN);
 });

@@ -9,6 +9,7 @@ import { buildBackup } from '../shared/backup.js';
 import { createCatalog } from './catalog.js';
 import { fail } from '../shared/errors.js';
 import { MASK, connectionFingerprint, connectionSkeleton, includesConfig, preflight, redact, restoreMasked, scanSources } from './config.js';
+import { commitCredentials, credentialOwners, credentialNames, inlineCredentials, isCredentialTemplate, planCredentials } from './vault.js';
 
 /** Chinese wording for the manager's terminal stop reasons. */
 const REASON_TEXT = {
@@ -51,7 +52,9 @@ export class HubService {
     this.waitMs = options.waitMs ?? 45000;
     this.intervalMs = options.intervalMs ?? 1000;
     this.maxConfigBytes = options.maxConfigBytes ?? DEFAULT_MAX_CONFIG_BYTES;
-    this.referenceStorage = options.referenceStorage === 'value' ? 'value' : 'template';
+    // Every secret is stored through the credential service now; the legacy
+    // `value` mode would write it back into the configuration, so it is ignored.
+    this.referenceStorage = 'template';
     this.probeTimeoutMs = options.probeTimeoutMs ?? 20000;
     this.descriptorTtlMs = options.descriptorTtlMs ?? 1500;
     this.catalog = options.catalog ?? createCatalog({
@@ -110,6 +113,38 @@ export class HubService {
     const provider = this.probeContext?.credentials;
     if (!provider?.describe || typeof name !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) return undefined;
     try { return await provider.describe(name); } catch { return undefined; }
+  }
+  /** The writable credential service; absent when the host runs without one. */
+  credentialsProvider() {
+    const provider = this.probeContext?.credentials ?? serviceOf(this.ctx, 'credentials');
+    if (!provider || typeof provider.set !== 'function' || typeof provider.describe !== 'function' || typeof provider.resolve !== 'function' || typeof provider.unset !== 'function') return undefined;
+    return provider;
+  }
+  /** Move every secret in `entry` into the credential store and reference it from the config. */
+  async planSecrets(entry, body, form, entries, owners = credentialOwners(entries, form.base?.servers ?? {})) {
+    const provider = this.credentialsProvider();
+    const planned = await planCredentials(entry, {
+      server: body.name,
+      env: this.env,
+      provider,
+      owners,
+      aliases: body.originalName ? [body.originalName] : [],
+    });
+    return { ...planned, provider };
+  }
+  /** Credential names the removed/replaced entry used and nothing else references now. */
+  orphanCredentials(entry) {
+    const form = this.descriptor({ fresh: true });
+    const owners = credentialOwners(form.value?.servers ?? {}, form.base?.servers ?? {});
+    return credentialNames(entry).filter(name => (owners.get(name)?.size ?? 0) === 0);
+  }
+  credentialsReport(planned) {
+    if (!planned) return undefined;
+    const report = {};
+    if (planned.stored?.length) report.stored = planned.stored;
+    if (planned.reused?.length) report.reused = planned.reused;
+    if (planned.missing?.length) report.missing = planned.missing;
+    return Object.keys(report).length ? report : undefined;
   }
   descriptor({ fresh = false } = {}) {
     const now = Date.now();
@@ -332,12 +367,27 @@ export class HubService {
     await this.persistMeta().catch(error => this.ctx.logger?.warn?.('MCP Hub 无法保存来源删除：' + (error?.message ?? error)));
     return this.sources();
   }
-  reveal(body) {
+  async reveal(body) {
     const current = body.candidateId ? this.candidates.get(body.candidateId)?.entry : this.descriptor().value?.servers?.[body.originalName];
     if (!current) fail('CANDIDATE_STALE', '配置已失效，请重新打开编辑窗口');
     if (!['env','headers','args'].includes(body.field)) fail('FIELD_UNSUPPORTED', '不支持读取此字段');
     const value = current[body.field]?.[body.key];
     if (typeof value !== 'string') fail('CONFIG_INVALID', '未找到配置值');
+    // A credential reference is resolved through the host; the value never lives
+    // in the configuration, so reading it back needs the credential service.
+    const names = credentialNames({ value });
+    if (names.length) {
+      const provider = this.credentialsProvider();
+      if (!provider) fail('CREDENTIAL_UNAVAILABLE', '当前 DSH 没有挂载凭证服务，无法读取密钥');
+      if (isCredentialTemplate(value)) {
+        const found = await provider.resolve(names[0]);
+        if (!found?.value) fail('CREDENTIAL_MISSING', '凭证未配置：' + names[0]);
+        return { value: found.value, source: found.source, name: names[0] };
+      }
+      const { entry, missing } = await inlineCredentials({ value }, provider);
+      if (missing.length) fail('CREDENTIAL_MISSING', '凭证未配置：' + missing.join('、'));
+      return { value: entry.value, names };
+    }
     return { value };
   }
   async presentSources(sources) {
@@ -374,14 +424,22 @@ export class HubService {
     return { sources: presented };
   }
   /** Build a backup for the browser; credentials are opt-in and explicit. */
-  exportBackup(body = {}) {
+  async exportBackup(body = {}) {
     const includeSecrets = body?.includeSecrets === true;
-    const servers = Object.entries(this.descriptor().value?.servers ?? {}).map(([name, entry]) => ({
-      name,
-      entry: includeSecrets ? entry : redact(entry),
-    }));
+    const provider = this.credentialsProvider();
+    const missing = new Set();
+    const servers = [];
+    for (const [name, entry] of Object.entries(this.descriptor().value?.servers ?? {})) {
+      if (!includeSecrets) { servers.push({ name, entry: redact(entry) }); continue; }
+      // Inlining resolves credential references so the backup is usable on
+      // another machine; the reference-only export keeps them unresolved.
+      if (!provider) { servers.push({ name, entry }); continue; }
+      const { entry: resolved, missing: names } = await inlineCredentials(entry, provider);
+      for (const item of names) missing.add(item);
+      servers.push({ name, entry: resolved });
+    }
     const { backup, omitted } = buildBackup(servers);
-    return { includeSecrets, count: Object.keys(backup).length, backup, omitted };
+    return { includeSecrets, count: Object.keys(backup).length, backup, omitted, credentialsMissing: [...missing] };
   }
   async catalogSearch(body, signal) { return this.catalog.search(body, signal); }
   async catalogDetail(body, signal) { return this.catalog.detail(body, signal); }
@@ -481,11 +539,14 @@ export class HubService {
         const conflict = Object.hasOwn(entries, body.name) || runtime.some(row => row.name === body.name);
         if (renamed ? conflict : !body.originalName && conflict) fail('NAME_TAKEN', '已有同名服务器，请修改名称');
         const { entry, candidate } = this.draft(body, entries);
-        const checked = await preflight(body.name, entry, this.preflightOptions());
+        // Secrets are moved into the credential store first, but only written once
+        // validation passes; a failed write rolls the new values back.
+        const planned = await this.planSecrets(entry, body, form, entries);
+        const checked = await preflight(body.name, planned.entry, this.preflightOptions());
         if (candidate?.issues.length && !body.acceptUnsupported) fail('CONFIG_INVALID', '请先确认来源配置中的未迁移字段');
         // 硬约束即使在「保存为停用」时也必须通过，否则会把非法条目交给官方校验。
-        if (checked.checks.some(check => check.hard && !check.ok)) return { ok: false, saved: false, checks: checked.checks, variables: checked.variables };
-        if (!checked.ok && body.mode !== 'draft') return { ok: false, saved: false, checks: checked.checks, variables: checked.variables };
+        if (checked.checks.some(check => check.hard && !check.ok)) return { ok: false, saved: false, checks: checked.checks, variables: checked.variables, credentials: this.credentialsReport(planned) };
+        if (!checked.ok && body.mode !== 'draft') return { ok: false, saved: false, checks: checked.checks, variables: checked.variables, credentials: this.credentialsReport(planned) };
         // Never claim success merely because the profile accepted the write.
         // New rows are enabled unless the caller explicitly asked for a draft;
         // editing preserves the row's current switch state.
@@ -496,8 +557,16 @@ export class HubService {
         const ops = renamed
           ? [{ op: 'set', path: ['servers', body.name], value: next }, { op: 'unset', path: ['servers', body.originalName] }]
           : [{ op: 'set', path: ['servers', body.name], value: next }];
-        await this.write(form, ops, next);
+        const rollback = await commitCredentials(planned.provider, planned.writes);
+        try {
+          await this.write(form, ops, next);
+        } catch (error) {
+          await rollback();
+          throw error;
+        }
         const warnings = [];
+        const previousEntry = entries[body.originalName ?? body.name];
+        const cleanup = previousEntry ? this.orphanCredentials(previousEntry) : [];
         if (renamed) {
           if (this.origins[body.originalName]) { this.origins[body.name] = this.origins[body.originalName]; delete this.origins[body.originalName]; }
           try { await this.persistMeta(); } catch { warnings.push('配置已保存，但来源记录未能写入'); }
@@ -506,20 +575,21 @@ export class HubService {
           this.origins[body.name] = { app: candidate.source, path: candidate.sourcePath, importedAt: new Date().toISOString() };
           try { await this.persistMeta(); } catch { warnings.push('配置已保存，但来源记录未能写入'); }
         }
-        if (!next.enabled) return { ok: false, saved: true, draft: true, checks: checked.checks, variables: checked.variables, warnings };
+        if (!next.enabled) return { ok: false, saved: true, draft: true, checks: checked.checks, variables: checked.variables, warnings, credentials: this.credentialsReport(planned), cleanup };
         // 写入与验证分开：写成功即返回，验证在后台继续，结果通过 list().verification 回报。
         this.startVerification(body.name, next, changed ? previousStatus?.connectedAt : undefined);
-        return { ok: true, saved: true, verifying: true, renamed, entry: redact(next), checks: [...checked.checks, { label: '配置已保存', ok: true, detail: '正在后台验证正式连接与工具注册，结果会显示在服务列表' }], warnings };
+        return { ok: true, saved: true, verifying: true, renamed, entry: redact(next), credentials: this.credentialsReport(planned), cleanup, checks: [...checked.checks, { label: '配置已保存', ok: true, detail: '正在后台验证正式连接与工具注册，结果会显示在服务列表' }], warnings };
       }
       if (!exists) fail('NOT_WRITABLE', '此服务由其他插件管理，无法在此修改');
       if (body.action === 'remove') {
         if (Object.hasOwn(form.base?.servers ?? {}, body.name)) fail('INHERITED_ROW', '此服务来自继承配置，只能停用');
         await this.write(form, [{ op: 'unset', path: ['servers', body.name] }], entries[body.name]);
+        const cleanup = this.orphanCredentials(entries[body.name]);
         delete this.origins[body.name];
         delete this.lastVerifications[body.name];
         this.verifications.delete(body.name);
         await this.persistMeta();
-        return { ok: true };
+        return { ok: true, cleanup };
       }
       if (body.action === 'toggle') {
         if (typeof body.enabled !== 'boolean') fail('REQUEST_INVALID', '缺少启停状态');
@@ -556,6 +626,10 @@ export class HubService {
     const skipped = [];
     const seen = new Set();
     const prepared = [];
+    // Track names allocated during this batch too: two pasted servers may both
+    // reference the same environment variable, and each must get its own copy
+    // instead of silently sharing one stored value.
+    const batchOwners = credentialOwners(entries, base);
     for (const item of body.entries) {
       if (!item || typeof item !== 'object' || typeof item.name !== 'string' || !item.name) fail('REQUEST_INVALID', '批量配置缺少服务名称');
       if (seen.has(item.name)) fail('NAME_TAKEN', `批量配置中有重复的服务名：${item.name}`);
@@ -566,16 +640,28 @@ export class HubService {
       }
       const { entry, candidate } = this.draft({ entry: item.entry, name: item.name, candidateId: item.candidateId }, entries);
       if (candidate?.issues?.length && !item.acceptUnsupported) fail('CONFIG_INVALID', `请先确认「${item.name}」中的未迁移字段`);
-      const checked = await preflight(item.name, entry, this.preflightOptions());
-      if (!checked.ok) return { ok: false, saved: false, failed: { name: item.name }, checks: checked.checks, variables: checked.variables };
+      const planned = await this.planSecrets(entry, { name: item.name }, form, entries, batchOwners);
+      const checked = await preflight(item.name, planned.entry, this.preflightOptions());
+      if (!checked.ok) return { ok: false, saved: false, failed: { name: item.name }, checks: checked.checks, variables: checked.variables, credentials: this.credentialsReport(planned) };
       // Pasting a config from another app often carries enabled:false. New rows
       // are always enabled here; enable/disable after adding is the list toggle's job.
-      prepared.push({ name: item.name, entry: { ...checked.entry, enabled: true }, candidate });
+      for (const name of credentialNames(planned.entry)) batchOwners.set(name, new Set([...(batchOwners.get(name) ?? []), item.name]));
+      prepared.push({ name: item.name, entry: { ...checked.entry, enabled: true }, candidate, planned });
     }
     if (!prepared.length) return { ok: true, saved: false, imported: [], skipped, detail: '没有新的服务' };
     // One settings.mutate for the whole batch: a revision conflict or a bad entry
-    // can never leave half of the pasted services behind.
-    await this.write(form, prepared.map(row => ({ op: 'set', path: ['servers', row.name], value: row.entry })), undefined);
+    // can never leave half of the pasted services behind. Credentials follow the
+    // same rule: write them only once every row passed, and roll back on failure.
+    const byName = new Map();
+    for (const planned of prepared.map(row => row.planned)) for (const write of planned.writes) byName.set(write.name, write);
+    const provider = prepared.find(row => row.planned.provider)?.planned.provider;
+    const rollback = await commitCredentials(provider, [...byName.values()]);
+    try {
+      await this.write(form, prepared.map(row => ({ op: 'set', path: ['servers', row.name], value: row.entry })), undefined);
+    } catch (error) {
+      await rollback();
+      throw error;
+    }
     const warnings = [];
     let metaDirty = false;
     for (const row of prepared) {
@@ -597,9 +683,13 @@ export class HubService {
       entries: Object.fromEntries(prepared.map(row => [row.name, structuredClone(row.entry)])),
       expiresAt: Date.now() + 10 * 60 * 1000,
     });
+    const stored = prepared.flatMap(row => row.planned.stored ?? []);
+    const reused = prepared.flatMap(row => row.planned.reused ?? []);
+    const missing = [...new Set(prepared.flatMap(row => row.planned.missing ?? []))];
     return {
       ok: true, saved: true, batchId, imported: prepared.map(row => row.name), skipped,
       verifying: enabled.length > 0, draft: enabled.length === 0,
+      credentials: this.credentialsReport({ stored, reused, missing }),
       checks: [{ label: '配置已保存', ok: true, detail: `一次写入 ${prepared.length} 个服务` }],
       warnings,
     };

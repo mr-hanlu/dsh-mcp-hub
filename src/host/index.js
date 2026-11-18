@@ -27,7 +27,7 @@ export const Config = z.object({
   maxConfigBytes: z.number().min(65536).max(16 * 1024 * 1024).default(DEFAULT_MAX_CONFIG_BYTES)
     .description('单个配置文件与请求体的上限（字节）'),
   referenceStorage: z.union(['template', 'value']).default('template')
-    .description('引用保存方式：template 保留 ${credential:…} 模板（推荐，配置里不出现密钥）；value 在保存时写入当前值'),
+    .description('已废弃：密钥现在统一写入 DSH 凭证服务，配置里只保留 ${credential:…} 引用；此选项仅为兼容旧 profile 保留'),
   catalogBaseUrl: z.string().default('https://registry.modelcontextprotocol.io')
     .description('官方 MCP Registry 地址；插件只读取目录，不提交任何内容'),
   catalogTimeoutMs: z.number().min(2000).max(60000).default(8000)
@@ -58,7 +58,7 @@ export function createHandler(getService, route, log) {
       if (route === 'catalog-search') return send(200, await service.catalogSearch(body, request.signal));
       if (route === 'catalog-detail') return send(200, await service.catalogDetail(body, request.signal));
       if (route === 'test') return send(200, await service.test(body, request.signal));
-      if (route === 'reveal') return send(200, service.reveal(body));
+      if (route === 'reveal') return send(200, await service.reveal(body));
       if (route === 'mutate') return send(200, await service.mutate(body));
       if (route === 'cancel') return send(200, service.cancelVerification(body.name));
       if (route === 'probe') return send(200, await service.probeExisting(body, request.signal));

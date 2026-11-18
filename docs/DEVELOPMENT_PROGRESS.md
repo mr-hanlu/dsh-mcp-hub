@@ -2,7 +2,7 @@
 
 更新日期：2026-11-18（Asia/Shanghai）
 
-> 收工状态：单测 106 项、`check`、`build`、`test:e2e`（stdio + HTTP + 凭证）、`test:ui`（页面主流程）全部通过；桌面实例已 link 安装并完成第一轮验收。CI 基础流水线与端到端作业已接入；启停后的验证结论已能刷新。下一步是补桌面人工项，见 [后续任务](NEXT_TASKS.md#下一次开发的建议顺序)。
+> 收工状态：单测 116 项、`check`、`build`、`test:e2e`（stdio + HTTP + 凭证）、`test:ui`（页面主流程）全部通过；桌面实例已 link 安装并完成第一轮验收。CI 基础流水线与端到端作业已接入；启停后的验证结论已能刷新；密钥已统一写入 DSH 凭证服务，配置只保留引用。下一步是补桌面人工项，见 [后续任务](NEXT_TASKS.md#下一次开发的建议顺序)。
 
 ## 当前版本与状态
 
@@ -60,6 +60,22 @@ CI：`.github/workflows/ci.yml` 分两个作业。`checks` 在 `ubuntu-latest` �
 页面层同时补了两条分支：连接测试进行中原本把「测试全部」按钮整个撤掉，进度文案是死代码；现在按钮保留并显示「测试中 n/m」，旁边是「取消测试」。`test:ui` 增加测试进度/取消、重名跳过、连接失败原因、缺失环境变量、保存后关闭、编辑已有服务六步，失败写全页截图；`tests/manual/echo-server.mjs` 支持 `MCP_ECHO_DELAY` 放慢握手，保证取消有可点的窗口。
 
 验证：`npm test`、`npm run check`、`npm run build`、`npm run test:e2e`、`npm run test:ui`（14 步）全部通过。
+
+## 本轮（2026-11-18）：密钥统一写入 DSH 凭证服务
+
+用户反馈「有环境变量 key 的 MCP 配置还要手动改底层文件，不符合简单操作」。现在保存时不再把密钥写进配置：明文、`${env:X}` 引用、启动参数与 URL 里的 token 都会先解析，再写入 DSH 凭证服务，配置里只保留 `${credential:MCPHUB_…}` 引用。
+
+| 位置 | 处理 |
+| --- | --- |
+| `src/host/vault.js`（新增） | 识别 env / headers / args / URL 里的明文与 `${env:X}` 引用；按 `MCPHUB_<服务>_<字段>` 生成名称（`Authorization`→`TOKEN`、`X-Api-Key`→`API_KEY`）；重名自动加 `_2` 后缀；只有本服务独占的名字允许原地轮换，其他情况一律新建，绝不覆盖别人的值；`commitCredentials` 记录 undo，写入失败按逆序回滚 |
+| `src/host/service.js` 保存路径 | `planCredentials` → `preflight` → `commitCredentials` → `write`；写配置失败时回滚已写入的凭证；返回 `credentials`（stored/reused/missing）与 `cleanup`（替换后已无引用的旧名） |
+| `src/host/service.js` 批量导入 | 每一行先 plan + preflight，全部通过后合并 writes 一次提交；写失败整批回滚 |
+| `reveal` / `exportBackup` | 都改为异步：`reveal` 通过凭证服务解析引用（不再只能读遮蔽值）；导出含密钥时把引用解析为明文，未配置的凭证名记入 `credentialsMissing`；不含密钥时保留引用模板 |
+| `src/client/App.jsx` + `i18n.js` | 保存/导入成功后内联提示「已写入 DSH 凭证：…」，不弹窗；导出选项说明区分「保留引用」与「解析为明文」；导出时提示未配置的凭证数量 |
+| 配置项 | `referenceStorage` 标记废弃，仅为兼容旧 profile 保留 |
+| `tests/service.test.mjs` | fixture 增加凭证服务替身（内存 Map）；新增 10 项：明文 header/env 入库、他服务占用名字加后缀、独占轮换、共享不覆盖、用户自定名保持、reveal 解析与缺失报错、导出含/不含密钥、draft 缺变量、args 与 URL 查询参数凭证化、批量导入同一环境变量各存一份（单测 106 → 116） |
+
+验证：`npm test` 116 项、`npm run check`、`npm run build`、`npm run test:e2e`、`npm run test:ui` 全部通过。
 
 ## 第一轮桌面验收（2026-11-17）
 
@@ -199,7 +215,7 @@ CI：`.github/workflows/ci.yml` 分两个作业。`checks` 在 `ubuntu-latest` �
 
 | 验证方式 | 结果与覆盖范围 |
 | --- | --- |
-| `npm test` | 106 项通过：格式解析、高德配置回归、env 缺失与凭据判定、脱敏、重复判断、版本冲突、旧连接误判、工具注册等待、真实非 MCP 程序拒绝、引用改写为凭证模板、硬约束与错误 code、项目级导入、坏条目容错、验证结果持久化、启停后重新验证、推送通道、复诊、备份占位符等 |
+| `npm test` | 115 项通过：格式解析、高德配置回归、env 缺失与凭据判定、脱敏、重复判断、版本冲突、旧连接误判、工具注册等待、真实非 MCP 程序拒绝、密钥写入凭证服务与名称生成/冲突/独占轮换、reveal 与导出解析、硬约束与错误 code、项目级导入、坏条目容错、验证结果持久化、启停后重新验证、推送通道、复诊、备份占位符等 |
 | `npm run check` | Host JavaScript 语法检查通过 |
 | `npm run build` | 插件浏览器模块及独立预览构建通过 |
 | `npm run test:e2e` | 通过：临时 `DSH_HOME` + `web` 模板 profile，真实 `/api/dsh-mcp-hub/*` 路由跑完 stdio 全链路（列表、扫描、测试、添加、验证、工具、启停、重启、删除）与 Streamable HTTP 全链路（静态 Bearer、凭证模板、凭证轮换重连、错误 token 判为需要认证）；删除后等官方清理行消失；不写用户 profile |
