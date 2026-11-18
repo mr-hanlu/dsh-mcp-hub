@@ -219,8 +219,8 @@ CI：`.github/workflows/ci.yml` 分两个作业。`checks` 在 `ubuntu-latest` �
 1. 导入采用一次性复制，后续由 DSH 独立管理，不修改或同步来源应用配置，也不复用其运行进程。
 2. 自动扫描只读取已知文件、检查运行条件，不执行 MCP 启动命令；点击测试或启用保存后才连接服务。
 3. 服务名是本地别名；可用性取决于命令或 URL 是否实现 MCP，而不是名称是否存在于在线目录。
-4. `${NAME}`、`${env:NAME}`、`{env:NAME}` 在保存时改写成 `${credential:NAME}`，由 DSH 凭证服务在连接时解析；引用本身不等于已配置密钥。
-5. 配置里不写密钥明文：引用是否存在仍会检查，实际取值只发生在测试连接的内存中；`referenceStorage=value` 是显式的回退方案。
+4. `${NAME}`、`${env:NAME}`、`{env:NAME}` 在保存时先解析值、再写入 DSH 凭证服务，配置里改写成 `${credential:MCPHUB_<服务>_<字段>}`；已有 `${credential:NAME}` 保持原名。引用本身不等于已配置密钥。
+5. 配置里不写密钥明文：真实的取值只发生在测试连接/`reveal`/导出时；`referenceStorage` 已废弃，配置为 `value` 也不再写明文。
 6. 导入、持久化、连接、工具注册是不同阶段。正式实例已连接且注册工具数一致才报告启用保存成功；停用保存不表示已验证可用。
 7. 不通过调用业务工具来测试权限，不对写入或删除类工具执行探测。
 8. 插件注册服务只读，继承配置只能停用；静态 mcp-client 和 Agent preset 不属于官方 Manager 的完整管理范围。
@@ -232,7 +232,7 @@ CI：`.github/workflows/ci.yml` 分两个作业。`checks` 在 `ubuntu-latest` �
 | `npm test` | 115 项通过：格式解析、高德配置回归、env 缺失与凭据判定、脱敏、重复判断、版本冲突、旧连接误判、工具注册等待、真实非 MCP 程序拒绝、密钥写入凭证服务与名称生成/冲突/独占轮换、reveal 与导出解析、硬约束与错误 code、项目级导入、坏条目容错、验证结果持久化、启停后重新验证、推送通道、复诊、备份占位符等 |
 | `npm run check` | Host JavaScript 语法检查通过 |
 | `npm run build` | 插件浏览器模块及独立预览构建通过 |
-| `npm run test:e2e` | 通过：临时 `DSH_HOME` + `web` 模板 profile，真实 `/api/dsh-mcp-hub/*` 路由跑完 stdio 全链路（列表、扫描、测试、添加、验证、工具、启停、重启、删除）与 Streamable HTTP 全链路（静态 Bearer、凭证模板、凭证轮换重连、错误 token 判为需要认证）；删除后等官方清理行消失；不写用户 profile |
+| `npm run test:e2e` | 通过：临时 `DSH_HOME` + `web` 模板 profile，真实 `/api/dsh-mcp-hub/*` 路由跑完 stdio 全链路（列表、扫描、测试、添加、验证、工具、启停、重启、删除）、启动/重连边界（2.5 秒慢握手、2 秒慢工具发现、握手后退出进入重连退避）与 Streamable HTTP 全链路（静态 Bearer、凭证模板、凭证轮换重连、错误 token 判为需要认证）；删除后等官方清理行消失；不写用户 profile |
 | `npm run test:ui` | 通过：无头 Chrome 在临时 profile 上点完设置页 —— 导航到 MCP Hub、空状态、导入页签、JSON 粘贴逐行测试、一次添加两个并显示已连接、重名跳过、测试进度与取消、连接失败原因、缺失环境变量、编辑已有服务、保存后关闭、删除弹窗与删后空状态、页签切换草稿保留；失败留截图 |
 | `node scripts/assert-pack.mjs` | 通过：`npm pack --dry-run --json --ignore-scripts` 的清单含 21 个文件，Host / 共享模块 / 浏览器模块 / 样式 / patch / locale / icon / 文档 / LICENSE 齐全，复审报告未进包 |
 | CI | 已接入 `.github/workflows/ci.yml`：基础作业公开 runner 可跑；端到端作业需自托管 runner（`DSH_E2E_RUNNER=true` + `dsh` 标签），CI 内 `DSH_E2E_REQUIRED=1` 禁止 SKIP |
