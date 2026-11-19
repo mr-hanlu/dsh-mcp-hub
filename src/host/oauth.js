@@ -11,6 +11,7 @@
  * Everything here is pure HTTP plus the PKCE helpers, so it can be tested
  * without a Host.
  */
+import { spawn } from 'node:child_process';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { fail } from '../shared/errors.js';
 
@@ -20,6 +21,37 @@ export const REFRESH_LEEWAY_MS = 120000;
 const CALLBACK_TIMEOUT_MS = 5 * 60 * 1000;
 
 /** Credential record key: one grant per server. */
+const OPENERS = {
+  darwin: ['open', []],
+  win32: ['rundll32', ['url.dll,FileProtocolHandler']],
+  linux: ['xdg-open', []],
+};
+
+// Open the user's default browser for the authorization page. The desktop shell
+// blocks programmatic window.open() from the client, so the host process (which
+// is a normal Node process on the user's machine) launches it instead.
+export function openExternal(url, { platform = process.platform, spawnImpl = spawn } = {}) {
+  let target;
+  try { target = new URL(url); } catch { return Promise.resolve({ opened: false, error: '授权地址无效' }); }
+  if (target.protocol !== 'https:' && target.protocol !== 'http:') {
+    return Promise.resolve({ opened: false, error: '只支持 http(s) 授权地址' });
+  }
+  const [command, prefix] = OPENERS[platform] ?? OPENERS.linux;
+  return new Promise(resolve => {
+    let settled = false;
+    const finish = value => { if (!settled) { settled = true; resolve(value); } };
+    try {
+      const child = spawnImpl(command, [...prefix, target.href], { detached: true, stdio: 'ignore', windowsHide: true });
+      child.once('error', error => finish({ opened: false, error: error.message }));
+      child.once('spawn', () => { try { child.unref(); } catch {} finish({ opened: true }); });
+    } catch (error) {
+      finish({ opened: false, error: error.message });
+    }
+    const timer = setTimeout(() => finish({ opened: true }), 800);
+    timer.unref?.();
+  });
+}
+
 export const oauthKey = server => `dsh-mcp-hub/oauth-${server}`;
 
 /** Environment-style reference the config header points at. */

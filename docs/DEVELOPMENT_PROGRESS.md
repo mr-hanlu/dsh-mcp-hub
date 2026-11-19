@@ -2,7 +2,7 @@
 
 更新日期：2026-11-20（Asia/Shanghai）
 
-> 收工状态：单测 157 项、`check`、`build`、`test:e2e`（stdio + 启动/重连边界 + HTTP + 凭证 + 删除后同名重加 + 宿主重启恢复 + 删除后重新导入 / 外部配置变更 / 并发保存 / 验证中关闭 / 卸载 + 非法端点快速失败，38 步）、`test:registry`（本地假 Registry 的分页 / 详情 / 失败边界，7 步）、`test:oauth`（本地假授权服务器的授权 / 刷新 / 重启 / 清理，7 步）、`test:simulated`（假 HOME + 九种客户端写法 + 各种密钥）、`test:ui`（页面主流程，23 步）、`test:layout`（浅色/深色/窄窗口）、`test:tarball`、`test:remote`（DeepWiki）、`test:real-sources`（本机真实 Codex / Claude Code 文件）全部通过；桌面实例已 link 安装并完成两轮验收，人工项已确认。CI 基础流水线与端到端作业已接入，`checks` 的 Windows runner 已真机跑绿并改为阻塞；启停后的验证结论已能刷新；密钥已统一写入 DSH 凭证服务，配置只保留引用；远程服务已支持 OAuth 登录（发现、DCR、PKCE、刷新）；删除后清理期的同名重加不再误报重名；页面剩余分支（表单补全变量、重命名引用行、失败后重测）已补齐；来源兼容矩阵用真实 Claude Code / Codex 样本建立；模拟来源功能验收覆盖了本机没装的客户端；桌面人工项整理成清单。下一步是清单里的桌面验收与其余来源的真实文件，见 [后续任务](NEXT_TASKS.md#下一次开发的建议顺序)。
+> 收工状态：单测 159 项、`check`、`build`、`test:e2e`（stdio + 启动/重连边界 + HTTP + 凭证 + 删除后同名重加 + 宿主重启恢复 + 删除后重新导入 / 外部配置变更 / 并发保存 / 验证中关闭 / 卸载 + 非法端点快速失败，38 步）、`test:registry`（本地假 Registry 的分页 / 详情 / 失败边界，7 步）、`test:oauth`（本地假授权服务器的授权 / 刷新 / 重启 / 清理，7 步）、`test:simulated`（假 HOME + 九种客户端写法 + 各种密钥）、`test:ui`（页面主流程，23 步）、`test:layout`（浅色/深色/窄窗口）、`test:tarball`、`test:remote`（DeepWiki）、`test:real-sources`（本机真实 Codex / Claude Code 文件）全部通过；桌面实例已 link 安装并完成两轮验收，人工项已确认。CI 基础流水线与端到端作业已接入，`checks` 的 Windows runner 已真机跑绿并改为阻塞；启停后的验证结论已能刷新；密钥已统一写入 DSH 凭证服务，配置只保留引用；远程服务已支持 OAuth 登录（发现、DCR、PKCE、刷新）；删除后清理期的同名重加不再误报重名；页面剩余分支（表单补全变量、重命名引用行、失败后重测）已补齐；来源兼容矩阵用真实 Claude Code / Codex 样本建立；模拟来源功能验收覆盖了本机没装的客户端；桌面人工项整理成清单。下一步是清单里的桌面验收与其余来源的真实文件，见 [后续任务](NEXT_TASKS.md#下一次开发的建议顺序)。
 
 ## 当前版本与状态
 
@@ -20,10 +20,10 @@
 - `src/host/service.js`：OAuth 行标记与状态（`needs-auth` / `authorizing` / `authorized` / `refreshing` / `failed`）、保存时不空等验证、`oauth-start` / `oauth-status` / `oauth-cancel`、按 60 秒 ticker 刷新到期前 120 秒的令牌、启动时从 grant 恢复、删除时清理记录与引用；新增 3 条路由（共 19 条）。
 - `src/host/config.js`：preflight 支持 `deferredCredentials`，允许 OAuth 行保存时把「尚未写入的引用」视为可接受，并给出「OAuth 授权后写入」的检查说明。
 - `src/client/App.jsx`：编辑页增加「认证方式」（访问令牌 / OAuth 登录），列表行在待授权时显示「授权」，顶部横幅给出授权链接与取消；切回令牌模式保存会清除 OAuth 标记。
-- 测试：`tests/oauth.test.mjs` 9 项（键名、PKCE、发现、DCR、换 token、refresh、grant 记录、回调）；`tests/e2e/oauth.e2e.mjs` 7 步，用本地假授权服务器走真实 Host，覆盖保存、授权、连接、重启免重授权、临近过期刷新、删除清理、未知服务 404。
+- 测试：`tests/oauth.test.mjs` 11 项（键名、PKCE、发现、DCR、换 token、refresh、grant 记录、回调、系统浏览器启动命令与失败兜底）；`tests/e2e/oauth.e2e.mjs` 7 步，用本地假授权服务器走真实 Host，覆盖保存、授权、连接、重启免重授权、临近过期刷新、删除清理、未知服务 404。
 - 修复：grant payload 里的 `clientSecret: undefined` 让凭据记录无法 JSON 序列化；改为提交前做一次 JSON 往返。未知服务的 `oauth-start` 从 403 改为 404。
 
-验证：单测 **157**、`check`、`build`、`test:e2e` 38 步、`test:registry` 7 步、`test:oauth` 7 步、`test:ui` 23 步（`DSH_E2E_PORT=3207` 避开桌面占用的 3080）、`test:simulated`、`test:layout`、打包 28 文件。真实 Notion 账号验收仍留在桌面清单。
+验证：单测 **159**、`check`、`build`、`test:e2e` 38 步、`test:registry` 7 步、`test:oauth` 7 步、`test:ui` 23 步（`DSH_E2E_PORT=3207` 避开桌面占用的 3080）、`test:simulated`、`test:layout`、打包 28 文件。真实 Notion 账号验收仍留在桌面清单。
 
 ## 本轮（2026-11-19 第四段）：P0 收尾
 
@@ -380,7 +380,7 @@ CI：`.github/workflows/ci.yml` 分两个作业。`checks` 在 `ubuntu-latest` �
 
 | 验证方式 | 结果与覆盖范围 |
 | --- | --- |
-| `npm test` | 157 项通过：格式解析、高德配置回归、env 缺失与凭据判定、脱敏、重复判断、版本冲突、旧连接误判、工具注册等待、真实非 MCP 程序拒绝、密钥写入凭证服务与名称生成/冲突/独占轮换、reveal 与导出解析、硬约束与错误 code、项目级导入、坏条目容错、验证结果持久化、启停后重新验证、推送通道、复诊、备份占位符、删除后清理期的同名重加与重试（`NAME_CLEANING`）、首次连接的「可能在下载依赖」提示、缺失变量名不带 `env:` 前缀、Windows 命令 PATHEXT 探测、无凭证服务时的拒绝与 Manager 行边界、验证中断态结算、非法端点快速失败、OAuth 键名/PKCE/发现/DCR/换 token/刷新/回调、来源兼容矩阵（真实 Claude Code / Codex 样本、空服务列表、`env_vars` 转发、相对命令与空 PATH）、跨来源重复识别等 |
+| `npm test` | 159 项通过：格式解析、高德配置回归、env 缺失与凭据判定、脱敏、重复判断、版本冲突、旧连接误判、工具注册等待、真实非 MCP 程序拒绝、密钥写入凭证服务与名称生成/冲突/独占轮换、reveal 与导出解析、硬约束与错误 code、项目级导入、坏条目容错、验证结果持久化、启停后重新验证、推送通道、复诊、备份占位符、删除后清理期的同名重加与重试（`NAME_CLEANING`）、首次连接的「可能在下载依赖」提示、缺失变量名不带 `env:` 前缀、Windows 命令 PATHEXT 探测、无凭证服务时的拒绝与 Manager 行边界、验证中断态结算、非法端点快速失败、OAuth 键名/PKCE/发现/DCR/换 token/刷新/回调、来源兼容矩阵（真实 Claude Code / Codex 样本、空服务列表、`env_vars` 转发、相对命令与空 PATH）、跨来源重复识别等 |
 | `npm run check` | Host JavaScript 语法检查通过 |
 | `npm run build` | 插件浏览器模块及独立预览构建通过 |
 | `npm run test:e2e` | 通过：临时 `DSH_HOME` + `web` 模板 profile，真实 `/api/dsh-mcp-hub/*` 路由跑完 stdio 全链路（列表、扫描、测试、添加、验证、工具、启停、重启、删除）、启动/重连边界（2.5 秒慢握手、2 秒慢工具发现、握手后退出进入重连退避）与 Streamable HTTP 全链路（静态 Bearer、凭证模板、凭证轮换重连、错误 token 判为需要认证、非法端口在 8 秒内判为连接地址不可用）；阶段 3 宿主重启恢复，阶段 4 删除后重新导入 / 外部配置热加载 / 并发三写，阶段 5 验证中停 Host 与卸载后 404；删除后等官方清理行消失、删除后立刻同名重加（运行中的同名仍判 `NAME_TAKEN`）；不写用户 profile |

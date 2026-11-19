@@ -2,10 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { createHash } from 'node:crypto';
+import { EventEmitter } from 'node:events';
 import {
   authorizeUrl, discover, exchangeCode, grantFromRecord, grantFromToken, grantNeedsRefresh,
   listenCallback, oauthKey, oauthReference, pkcePair, refreshGrant, registerClient,
-  resourceMetadataUrls, serverMetadataUrls,
+  resourceMetadataUrls, serverMetadataUrls, openExternal,
 } from '../src/host/oauth.js';
 
 /** Local authorization server: PRM on the MCP path, AS metadata one level down. */
@@ -151,4 +152,49 @@ test('the loopback callback resolves once with the provider parameters', async (
     assert.equal(callback.state.code, 'abc');
     assert.equal(typeof callback.state.received, 'string');
   } finally { callback.close(); }
+});
+
+function fakeChild() {
+  const child = new EventEmitter();
+  child.unref = () => {};
+  queueMicrotask(() => child.emit('spawn'));
+  return child;
+}
+
+test('openExternal launches the platform opener and refuses non-http URLs', async () => {
+  const calls = [];
+  const opened = await openExternal('https://example.com/authorize?x=1&y=2', {
+    platform: 'darwin',
+    spawnImpl: (command, args, options) => { calls.push({ command, args, options }); return fakeChild(); },
+  });
+  assert.equal(opened.opened, true);
+  assert.equal(calls[0].command, 'open');
+  assert.deepEqual(calls[0].args, ['https://example.com/authorize?x=1&y=2']);
+  assert.equal(calls[0].options.detached, true);
+
+  const win = [];
+  await openExternal('https://example.com/a', {
+    platform: 'win32',
+    spawnImpl: (command, args) => { win.push({ command, args }); return fakeChild(); },
+  });
+  assert.equal(win[0].command, 'rundll32');
+  assert.deepEqual(win[0].args, ['url.dll,FileProtocolHandler', 'https://example.com/a']);
+
+  const refused = await openExternal('file:///etc/passwd', {
+    platform: 'linux',
+    spawnImpl: () => { throw new Error('must not spawn'); },
+  });
+  assert.equal(refused.opened, false);
+  assert.match(refused.error, /http/);
+});
+
+test('openExternal reports a launch failure instead of throwing', async () => {
+  const child = new EventEmitter();
+  child.unref = () => {};
+  const result = await openExternal('https://example.com/a', {
+    platform: 'linux',
+    spawnImpl: () => { queueMicrotask(() => child.emit('error', new Error('xdg-open missing'))); return child; },
+  });
+  assert.equal(result.opened, false);
+  assert.match(result.error, /xdg-open missing/);
 });

@@ -23,7 +23,7 @@
 
 ## 单元测试
 
-`npm test` 直接跑 `tests/*.test.mjs`，用 Node 内置 `node:test` + `assert/strict`，不依赖测试框架。共 **157 项**。
+`npm test` 直接跑 `tests/*.test.mjs`，用 Node 内置 `node:test` + `assert/strict`，不依赖测试框架。共 **159 项**。
 
 | 文件 | 覆盖内容 |
 | --- | --- |

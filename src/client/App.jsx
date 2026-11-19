@@ -1199,19 +1199,14 @@ export function App({ request = apiRequest, preview = false, locale }) {
   async function action(action, server, confirmed = false) {
     if (action === 'oauth') {
       setBusy(server.name); setError('');
-      // Open the tab while we still have the click gesture; navigating it after
-      // the request avoids the popup blocker that an async window.open hits.
-      let popup = null;
-      try { popup = window.open('about:blank', '_blank'); } catch {}
       try {
-        const started = await request('/oauth-start', { name: server.name });
-        if (started?.state === 'authorized') { popup?.close(); await refresh(true); return; }
-        if (popup) popup.location.href = started.url;
-        else notify('浏览器没有自动打开，请点击顶部「打开授权页面」。');
+        // The desktop shell blocks window.open from the renderer, so the host
+        // process launches the system browser for us.
+        const started = await request('/oauth-start', { name: server.name, open: true });
+        if (started?.state === 'authorized') { await refresh(true); return; }
         setOauthLink({ name: server.name, url: started.url });
         void pollOAuth(server.name);
       } catch (error) {
-        try { popup?.close(); } catch {}
         setError(textError(error));
       }
       finally { setBusy(''); }

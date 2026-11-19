@@ -10,7 +10,7 @@ import { createCatalog } from './catalog.js';
 import { fail } from '../shared/errors.js';
 import { MASK, connectionFingerprint, connectionSkeleton, includesConfig, preflight, redact, restoreMasked, scanSources } from './config.js';
 import { commitCredentials, credentialOwners, credentialNames, inlineCredentials, isCredentialTemplate, planCredentials } from './vault.js';
-import { discover, registerClient, pkcePair, authorizeUrl, exchangeCode, refreshGrant, grantFromRecord, grantNeedsRefresh, listenCallback, oauthKey, oauthReference } from './oauth.js';
+import { discover, registerClient, pkcePair, authorizeUrl, exchangeCode, refreshGrant, grantFromRecord, grantNeedsRefresh, listenCallback, oauthKey, oauthReference, openExternal } from './oauth.js';
 
 /** Chinese wording for the manager's terminal stop reasons. */
 const REASON_TEXT = {
@@ -211,7 +211,10 @@ export class HubService {
     const marker = this.oauth[name];
     if (!marker) fail('OAUTH_NOT_CONFIGURED', '这个服务没有配置 OAuth 登录，请先编辑并选择 OAuth 认证');
     const running = this.oauthAttempts.get(name);
-    if (running?.state === 'authorizing') return { state: 'authorizing', url: running.url };
+    if (running?.state === 'authorizing') {
+      const opened = body.open === true ? await openExternal(running.url) : undefined;
+      return { state: 'authorizing', url: running.url, opened };
+    }
     const authorization = this.authorizationProvider();
     if (!authorization) fail('OAUTH_UNAVAILABLE', '当前 DSH 没有挂载授权服务，无法发起 OAuth 登录。请升级到 0.2.2 及以上版本');
     const credentials = this.credentialsProvider();
@@ -262,7 +265,8 @@ export class HubService {
         // Keep the URL around briefly so a polling page can still render the error.
         setTimeout(() => { if (this.oauthAttempts.get(name) === attempt) this.oauthAttempts.delete(name); }, 60000).unref?.();
       });
-    return { state: 'authorizing', url };
+    const opened = body.open === true ? await openExternal(url) : undefined;
+    return { state: 'authorizing', url, opened };
   }
   async oauthStatus(body) {
     const name = body.name;
