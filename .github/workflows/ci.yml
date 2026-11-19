@@ -19,9 +19,6 @@ jobs:
   checks:
     name: 单测 / 语法 / 构建 / 打包（${{ matrix.os }}）
     runs-on: ${{ matrix.os }}
-    # Windows 先以报告形式接入：PATH/PATHEXT 解析已经有平台无关的单测，但整套单测
-    # 还没在真机上跑绿过一轮，先不要因为一个已知的历史假设让 main 变红。
-    continue-on-error: ${{ matrix.os == 'windows-latest' }}
     strategy:
       fail-fast: false
       matrix:

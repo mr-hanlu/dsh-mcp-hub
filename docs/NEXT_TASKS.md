@@ -80,7 +80,7 @@
 
 ### 6. 接入 CI
 
-`.github/workflows/ci.yml` 已接入；本地基线先跑通（单测 148 项、`check`、`build`、五条端到端脚本、打包清单 27 个文件全部通过）。`checks` 同时在 `windows-latest` 与 `ubuntu-latest` 上跑，Windows 先设为 `continue-on-error`（报告模式）。2026-11-19 已修掉 Windows 上必然失败的 XDG 路径断言（`tests/sources.test.mjs` 改用 `[\\/]`），待下一次推送确认真机全绿后再改成阻塞。
+`.github/workflows/ci.yml` 已接入；本地基线先跑通（单测 148 项、`check`、`build`、五条端到端脚本、打包清单 27 个文件全部通过）。`checks` 同时在 `windows-latest` 与 `ubuntu-latest` 上跑，两者都是阻塞项。2026-11-19 修掉 Windows 上必然失败的 XDG 路径断言（`tests/sources.test.mjs` 改用 `[\\/]`）与 `~` 展开后的盘符断言后，Windows job 已在 `aceb0ec` 上真机跑绿，`continue-on-error` 已移除。
 
 - [x] 基础流水线：`npm ci` → `npm test` → `npm run check` → `npm run build` → `npm pack --dry-run --json --ignore-scripts` 交给 `scripts/assert-pack.mjs` 断言包内容（`lib/client.js`、`lib/style.css`、`cordis.patch.yml`、`locale/`、`icon.svg`、`src/host`、`src/shared`、`README.md`、`LICENSE`），并断言复审报告不进包。这一层不需要 DSH，公开 runner 即可。
 - [x] 端到端流水线（需要装了 DSH 的机器）：`npm run test:e2e`、`npm run test:registry` 与 `npm run test:ui` 串行跑在一个带 `dsh` 标签的自托管 runner 上，由仓库变量 `DSH_E2E_RUNNER=true` 打开（未打开时整个 job 跳过，不会挂起）。CI 里设 `DSH_E2E_REQUIRED=1`，把「找不到 dsh / Chrome」从 SKIP 变成失败——否则 runner 没装 DSH 时会绿灯通过但什么都没测。
@@ -105,7 +105,7 @@
 | 运行环境帮助 | 命令绝对路径、PATH、目录、变量引用与凭证引用的差异可直接理解 |
 | 来源缓存与状态刷新（状态部分已完成：长轮询推送；来源缓存仍待定） | 明确手动文件候选保留范围；窗口重开、外部修改及并发刷新不显示旧状态 |
 | 可访问性与布局（布局已自动截图，键盘焦点仍待人工） | 键盘焦点、模态背景交互、长参数、窄窗口、深浅色主题、中文溢出；`npm run test:layout` 已覆盖溢出的断言 |
-| 跨平台验证（部分完成 2026-11-19） | Windows 的 `npx`/`uvx` 已按 PATHEXT 解析为 `.cmd`/`.exe`，PATH/PATHEXT 大小写不敏感；XDG 路径断言已改为跨平台；`checks` 已加 Windows runner（报告模式）。仍待：真机跑绿后改为阻塞、目录与安装行为、Linux 覆盖 |
+| 跨平台验证（部分完成 2026-11-19） | Windows 的 `npx`/`uvx` 已按 PATHEXT 解析为 `.cmd`/`.exe`，PATH/PATHEXT 大小写不敏感；XDG 路径与 `~` 展开断言已改为跨平台；Windows job 已真机跑绿并改为阻塞。仍待：目录与安装行为、Linux 覆盖 |
 | 多语言（已完成） | 中文 / 英文跟随 DSH 语言设置；业务组件仍以中文为源文案，由 `src/client/i18n.js` 在渲染边界翻译 |
 
 ## P2：后续产品能力
@@ -150,11 +150,11 @@
 
 ## 下一次开发的建议顺序
 
-截至 2026-11-19（r10）：安装、Host 侧验收、`test:e2e`（38 步，含宿主重启恢复、阶段 4/5 与非法端点快速失败）、`test:registry`（7 步，本地假 Registry）、`test:ui`（23 步）、`test:simulated`（九种客户端 + 各种密钥写法）、`test:layout`（浅色/深色/窄窗口）、CI（含 Windows 报告模式）、启停后重新验证、密钥统一写入 DSH 凭证服务、行内查看/复制/编辑密钥、删除后清理期同名重加、来源兼容矩阵、Windows 命令探测、无凭证服务与官方 Manager 行边界、删除后重新导入 / 外部配置变更 / 并发保存 / 验证中关闭 / 卸载后 404、桌面人工项都已完成；`test:tarball`、`test:remote`、`test:real-sources` 三个可选验收也已跑通；本地基线全绿（单测 148 项、`check`、`build`、五条端到端脚本、打包清单 27 个文件）。
+截至 2026-11-19（r10）：安装、Host 侧验收、`test:e2e`（38 步，含宿主重启恢复、阶段 4/5 与非法端点快速失败）、`test:registry`（7 步，本地假 Registry）、`test:ui`（23 步）、`test:simulated`（九种客户端 + 各种密钥写法）、`test:layout`（浅色/深色/窄窗口）、CI（Ubuntu + Windows 均阻塞）、启停后重新验证、密钥统一写入 DSH 凭证服务、行内查看/复制/编辑密钥、删除后清理期同名重加、来源兼容矩阵、Windows 命令探测、无凭证服务与官方 Manager 行边界、删除后重新导入 / 外部配置变更 / 并发保存 / 验证中关闭 / 卸载后 404、桌面人工项都已完成；`test:tarball`、`test:remote`、`test:real-sources` 三个可选验收也已跑通；本地基线全绿（单测 148 项、`check`、`build`、五条端到端脚本、打包清单 27 个文件）。
 
-1. 复现基线：`npm ci && npm test && npm run check && npm run build`，再**串行**跑 `npm run test:e2e`、`npm run test:registry` 与 `npm run test:ui`（e2e / ui 各约 1–2 分钟且都默认占 `127.0.0.1:3080`，并行会 EADDRINUSE）。推送后确认 CI 的 checks 作业（Ubuntu 为阻塞项，Windows 目前只报告）；Windows 变绿后把 `continue-on-error` 去掉。要跑端到端按 README「持续集成」挂 runner。
+1. 复现基线：`npm ci && npm test && npm run check && npm run build`，再**串行**跑 `npm run test:e2e`、`npm run test:registry` 与 `npm run test:ui`（e2e / ui 各约 1–2 分钟且都默认占 `127.0.0.1:3080`，并行会 EADDRINUSE）。推送后确认 CI 的 checks 作业（Ubuntu 与 Windows 均为阻塞项）。要跑端到端按 README「持续集成」挂 runner。
 2. 补齐 P0-2 的真实来源样本（Windsurf / Cursor / Copilot 装好后跑 `test:real-sources`）与 P0-3 的两处真实边界（首次 npx 下载、清理失败案例）。
-3. 桌面实例再确认一次 Windows / Linux 上的安装与目录行为（目前只有 macOS 与 Windows 单元测试报告）。
+3. 桌面实例再确认一次 Windows / Linux 上的安装与目录行为（目前只有 macOS 实机与 Windows 单元测试）。
 4. 再进入认证：OAuth 授权与 401 重授权（Token 助手/凭证写入已完成，认证状态模型仍需在 OAuth 前补齐）。
 
 ## 提交与发布约定

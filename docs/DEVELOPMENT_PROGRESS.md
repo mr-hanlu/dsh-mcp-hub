@@ -2,7 +2,7 @@
 
 更新日期：2026-11-19（Asia/Shanghai）
 
-> 收工状态：单测 148 项、`check`、`build`、`test:e2e`（stdio + 启动/重连边界 + HTTP + 凭证 + 删除后同名重加 + 宿主重启恢复 + 删除后重新导入 / 外部配置变更 / 并发保存 / 验证中关闭 / 卸载 + 非法端点快速失败，38 步）、`test:registry`（本地假 Registry 的分页 / 详情 / 失败边界，7 步）、`test:simulated`（假 HOME + 九种客户端写法 + 各种密钥）、`test:ui`（页面主流程，23 步）、`test:layout`（浅色/深色/窄窗口）、`test:tarball`、`test:remote`（DeepWiki）、`test:real-sources`（本机真实 Codex / Claude Code 文件）全部通过；桌面实例已 link 安装并完成两轮验收，人工项已确认。CI 基础流水线与端到端作业已接入，`checks` 另加 Windows runner（报告模式）；启停后的验证结论已能刷新；密钥已统一写入 DSH 凭证服务，配置只保留引用；删除后清理期的同名重加不再误报重名；页面剩余分支（表单补全变量、重命名引用行、失败后重测）已补齐；来源兼容矩阵用真实 Claude Code / Codex 样本建立；模拟来源功能验收覆盖了本机没装的客户端；桌面人工项整理成清单。下一步是清单里的桌面验收与其余来源的真实文件，见 [后续任务](NEXT_TASKS.md#下一次开发的建议顺序)。
+> 收工状态：单测 148 项、`check`、`build`、`test:e2e`（stdio + 启动/重连边界 + HTTP + 凭证 + 删除后同名重加 + 宿主重启恢复 + 删除后重新导入 / 外部配置变更 / 并发保存 / 验证中关闭 / 卸载 + 非法端点快速失败，38 步）、`test:registry`（本地假 Registry 的分页 / 详情 / 失败边界，7 步）、`test:simulated`（假 HOME + 九种客户端写法 + 各种密钥）、`test:ui`（页面主流程，23 步）、`test:layout`（浅色/深色/窄窗口）、`test:tarball`、`test:remote`（DeepWiki）、`test:real-sources`（本机真实 Codex / Claude Code 文件）全部通过；桌面实例已 link 安装并完成两轮验收，人工项已确认。CI 基础流水线与端到端作业已接入，`checks` 的 Windows runner 已真机跑绿并改为阻塞；启停后的验证结论已能刷新；密钥已统一写入 DSH 凭证服务，配置只保留引用；删除后清理期的同名重加不再误报重名；页面剩余分支（表单补全变量、重命名引用行、失败后重测）已补齐；来源兼容矩阵用真实 Claude Code / Codex 样本建立；模拟来源功能验收覆盖了本机没装的客户端；桌面人工项整理成清单。下一步是清单里的桌面验收与其余来源的真实文件，见 [后续任务](NEXT_TASKS.md#下一次开发的建议顺序)。
 
 ## 当前版本与状态
 
@@ -26,7 +26,7 @@
 | `package.json` / `.github/workflows/ci.yml` | 新增 `test:registry`；端到端作业在 `test:e2e` 之后串行跑它（同样 `DSH_E2E_REQUIRED=1`）。 |
 | `docs/NEXT_TASKS.md` / `docs/DESKTOP_ACCEPTANCE.md` | r10：P0-1 标完成（维护者已人工复核 1–3、5–6 组），P0-3 的连接错误口径关闭，P2 的 Registry 边界关闭；基线改为 148 项 / 38 步 / 7 步。 |
 
-验证：`npm test` 148 项、`npm run check`、`npm run build`、`npm run test:e2e`（38 步）、`npm run test:registry`（7 步）全部通过；Windows job 需下一次推送后确认真机全绿，确认前仍保持报告模式。
+验证：`npm test` 148 项、`npm run check`、`npm run build`、`npm run test:e2e`（38 步）、`npm run test:registry`（7 步）全部通过；Windows job 在 `aceb0ec` 上真机跑绿，`continue-on-error` 已移除。
 
 ## 本轮（2026-11-19 第三段）：文档分层与测试说明
 
