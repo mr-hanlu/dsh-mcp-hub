@@ -201,7 +201,7 @@ async function main() {
       const labels = await page.evaluate(() => [...new Set(Array.from(document.querySelectorAll('button')).map(node => (node.getAttribute('aria-label') || node.textContent || '').trim()).filter(Boolean))]);
       throw new Error('找不到「添加 N 个」按钮，当前按钮：' + JSON.stringify(labels.slice(-20)));
     }
-    await waitForText(page, '已添加 2 个服务', { label: '批量添加' });
+    await waitForText(page, /2 个 MCP 服务 已保存，正在验证连接/, { label: '批量添加' });
     await waitForText(page, /uitest1.*已连接/, { label: '行状态', timeoutMs: 60000 });
     await waitForText(page, /uitest2.*已连接/, { label: '第二行状态', timeoutMs: 60000 });
     step('add-two', { ok: true, connected: 2 });
@@ -214,7 +214,7 @@ async function main() {
     assert.equal(await clickLabel(page, '测试全部'), true, '找不到「测试全部」');
     await waitForText(page, /已测试 1\/1/, { label: '只测试新服务' });
     if (!(await clickLabel(page, /^添加 1 个$/))) throw new Error('找不到「添加 1 个」按钮');
-    await waitForText(page, '已添加 1 个服务', { label: '只添加新服务' });
+    await waitForText(page, /uitest3 已保存，正在验证连接/, { label: '只添加新服务' });
     await waitForText(page, /uitest3.*已连接/, { label: '新服务连接', timeoutMs: 60000 });
     step('duplicate-skip', { ok: true, added: 1, skipped: 1 });
 
@@ -242,7 +242,7 @@ async function main() {
     assert.equal(await clickLabel(page, '测试全部'), true, '凭据化步骤找不到「测试全部」');
     await waitForText(page, /已测试 1\/1/, { label: '凭据化测试' });
     if (!(await clickLabel(page, /^添加 1 个$/))) throw new Error('凭据化步骤找不到「添加 1 个」按钮');
-    await waitForText(page, /已添加 1 个服务（密钥已写入 DSH 凭证）/, { label: '凭证写入提示', timeoutMs: 30000 });
+    await waitForText(page, /uiauth 已保存，正在验证连接（密钥已写入 DSH 凭证）/, { label: '凭证写入提示', timeoutMs: 30000 });
     await waitForText(page, /uiauth.*已连接/, { label: '凭据化行状态', timeoutMs: 60000 });
     step('credential-save', { ok: true });
     // 「显示」通过 Host 解析 DSH 凭证，10 秒后自动隐藏。

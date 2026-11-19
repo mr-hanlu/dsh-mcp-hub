@@ -1001,7 +1001,6 @@ export function App({ request = apiRequest, preview = false, locale }) {
   const [loadError, setLoadError] = useState('');
   const [notice, setNotice] = useState(null);
   const [noticePaused, setNoticePaused] = useState(false);
-  const [undo, setUndo] = useState(null);
   const [deleteError, setDeleteError] = useState('');
   const [loading, setLoading] = useState(true);
   const [scanning, setScanning] = useState(false);
@@ -1017,7 +1016,6 @@ export function App({ request = apiRequest, preview = false, locale }) {
   const [busy, setBusy] = useState('');
   const [toolDetails, setToolDetails] = useState({});
   const fileInput = useRef(null);
-  const undoTimer = useRef(null);
   const alive = useRef(true);
   const generation = useRef(0);
   const sourcesLoaded = useRef(false);
@@ -1094,32 +1092,12 @@ export function App({ request = apiRequest, preview = false, locale }) {
     })();
     return () => { cancelled = true; controller.abort(); alive.current = false; };
   }, [request]);
-  useEffect(() => () => clearTimeout(undoTimer.current), []);
   useEffect(() => {
     if (!notice || noticePaused) return;
     const timer = setTimeout(() => setNotice(null), 3500);
     return () => clearTimeout(timer);
   }, [notice, noticePaused]);
   function notify(text, tone = 'good') { setNoticePaused(false); setNotice({text,tone,id:Date.now()}); }
-  function showUndo(batchId, names, note = '') {
-    if (!batchId || !names.length) return;
-    clearTimeout(undoTimer.current);
-    setUndo({ batchId, names, note });
-    undoTimer.current = setTimeout(() => setUndo(null), 20000);
-  }
-  async function undoImport() {
-    if (!undo) return;
-    setBusy('undo');
-    try {
-      const result = await request('/mutate', { action: 'undo-import', batchId: undo.batchId, revision: revision.current });
-      setUndo(null);
-      await refresh(true);
-      const removed = result.removed ?? [];
-      notify(removed.length ? `已撤销 ${removed.length} 个服务` : '没有可撤销的服务', removed.length ? 'good' : 'muted');
-      if (result.skipped?.length) notify(`已撤销 ${removed.length} 个；${result.skipped.length} 个已修改，未撤销`, 'muted');
-    } catch (error) { notify(textError(error), 'bad'); }
-    finally { setBusy(''); }
-  }
   async function syncSources(nextRevision) {
     const id = ++sourceGeneration.current;
     try { const result = await request('/sources'); if (alive.current && id === sourceGeneration.current) { setSources(result.sources); setScanError(''); sourceRevision.current = nextRevision; } }
@@ -1245,7 +1223,6 @@ export function App({ request = apiRequest, preview = false, locale }) {
     <p className="hub-description">连接、管理你的 MCP 服务，把常用工具带到 DSH。</p>
     <nav className="hub-main-tabs" aria-label="MCP Hub 页面"><button type="button" aria-current={tab === 'installed' ? 'page' : undefined} className={tab === 'installed' ? 'active' : ''} onClick={() => setTab('installed')}><Icon name="box"/>已添加 <small>{servers.length}</small></button><button type="button" aria-current={tab === 'import' ? 'page' : undefined} className={tab === 'import' ? 'active' : ''} onClick={() => setTab('import')}><Icon name="import"/>本地导入</button><button type="button" aria-current={tab === 'catalog' ? 'page' : undefined} className={tab === 'catalog' ? 'active' : ''} onClick={() => setTab('catalog')}><Icon name="search"/>在线搜索</button></nav>
     {(error || loadError) && <div className="hub-banner bad" role="alert"><Icon name="info"/><span>{error || loadError}</span><button className="hub-text-button" onClick={() => { setError(''); refresh().catch(() => {}); }}>重试</button></div>}
-    {undo && <div className="hub-undo" role="status"><span>已添加 {undo.names.length} 个服务{undo.note}</span><button type="button" className="hub-text-button" disabled={!!busy} onClick={undoImport}>撤销</button><IconButton icon="close" label="关闭撤销提示" onClick={() => setUndo(null)}/></div>}
     {notice && <div className={'hub-toast ' + notice.tone} role="status" onMouseEnter={()=>setNoticePaused(true)} onMouseLeave={()=>setNoticePaused(false)} onFocus={()=>setNoticePaused(true)} onBlur={()=>setNoticePaused(false)}><Icon name={notice.tone === 'good' ? 'check' : 'info'}/><span>{notice.text}</span><IconButton icon="close" label="关闭通知" onClick={() => setNotice(null)}/></div>}
     <Boundary>
     {tab === 'catalog' ? <CatalogPanel request={request} onInstall={(install, option) => setDraft({ name: install.name, entry: option.entry, initialMode: 'form', source: '官方 MCP Registry', sourcePath: install.registryName, jsonText: JSON.stringify({ mcpServers: { [install.name]: option.entry } }, null, 2), jsonFormat: 'json' })}/> : tab === 'installed' ? <>
@@ -1258,16 +1235,13 @@ export function App({ request = apiRequest, preview = false, locale }) {
     </Boundary>
     {confirm && <DeleteDialog server={confirm} busy={!!busy} error={deleteError} onCancel={()=>setConfirm(null)} onDelete={()=>action('remove',confirm,true)}/>}
     {exportOpen && <ExportDialog busy={exportBusy} error={exportError} onCancel={()=>{ if(!exportBusy) setExportOpen(false); }} onExport={exportConfig}/>}
-    {draft && <Editor draft={draft} existing={takenNames(servers)} revision={data?.revision} request={request} reloadRevision={async () => (await refresh(true)).revision} onClose={() => setDraft(null)} onSaved={async ({result,names = [],batch}) => {
+    {draft && <Editor draft={draft} existing={takenNames(servers)} revision={data?.revision} request={request} reloadRevision={async () => (await refresh(true)).revision} onClose={() => setDraft(null)} onSaved={async ({result,names = []}) => {
       const next = await refresh(true);
       const count = names.length;
       const label = count > 1 ? `${count} 个 MCP 服务` : (names[0] ?? '服务');
       const verifying = Array.isArray(result.verifying) ? result.verifying.length > 0 : Boolean(result.verifying);
       const secrets = result.credentials?.stored?.length ? '（密钥已写入 DSH 凭证）' : '';
-      if (batch) {
-        setDraft(null);
-        showUndo(result.batchId, result.imported ?? names, secrets);
-      } else if (result.ok || result.draft) {
+      if (result.ok || result.draft) {
         setDraft(null);
         notify(result.draft ? label + ' 已保存，保持停用' + secrets : verifying ? label + ' 已保存，正在验证连接' + secrets : label + ' 已保存' + secrets, result.draft ? 'muted' : 'good');
       }

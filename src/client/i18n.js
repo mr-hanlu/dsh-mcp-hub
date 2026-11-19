@@ -28,9 +28,7 @@ const EN = {
   '编辑 MCP 服务': 'Edit MCP service',
   '关闭配置窗口': 'Close configuration window',
   '打开 GitHub 项目': 'Open the GitHub project',
-  '关闭撤销提示': 'Dismiss undo',
   '关闭通知': 'Dismiss notification',
-  '撤销': 'Undo',
   '服务': 'Service',
   '管理': 'Manage',
   '个 MCP 服务': ' MCP services',
@@ -310,7 +308,6 @@ const EN = {
   '已保存，保持停用': 'Saved, kept disabled',
   '已保存，正在验证连接': 'Saved, verifying connection',
   '没有可导出的配置': 'Nothing to export',
-  '没有可撤销的服务': 'Nothing to undo',
   '没有需要重连的服务': 'No services need reconnecting',
 
   // Host-facing messages
@@ -464,10 +461,6 @@ const EN = {
 const DYNAMIC = [
   [/^第 (\d+)\/(\S+) 次重试$/, 'Attempt $1/$2'],
   [/^状态未知（(.+)）$/, 'Unknown status ($1)'],
-  [/^已添加 (\d+) 个服务$/, 'Added $1 services'],
-  [/^已添加 (\d+) 个服务（密钥已写入 DSH 凭证）$/, 'Added $1 services (secrets stored as DSH credentials)'],
-  [/^已撤销 (\d+) 个服务$/, 'Removed $1 services'],
-  [/^已撤销 (\d+) 个；(\d+) 个已修改，未撤销$/, 'Removed $1; $2 modified and kept'],
   [/^已请求重连 (\d+) 个服务$/, 'Reconnect requested for $1 services'],
   [/^已导出 (\d+) 个服务$/, 'Exported $1 services'],
   [/^已导出 (\d+) 个服务（包含密钥），请妥善保管$/, 'Exported $1 services with secrets. Keep the file safe.'],
