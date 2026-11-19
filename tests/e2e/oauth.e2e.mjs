@@ -85,6 +85,13 @@ async function main() {
     assert.equal(started.body.state, 'authorizing');
     assert.match(started.body.url, /response_type=code/);
     assert.match(started.body.url, /code_challenge_method=S256/);
+    // The row itself carries the URL while authorizing, so multiple rows can wait
+    // independently without a global banner.
+    const authorizing = await call('/servers');
+    const pendingRow = authorizing.body.servers.find(server => server.name === 'oauthsvc');
+    assert.equal(pendingRow.oauth.state, 'authorizing');
+    assert.match(pendingRow.oauth.url, /response_type=code/);
+    step('oauth-row-url', { state: pendingRow.oauth.state });
     const authorize = await fetch(started.body.url, { redirect: 'manual' });
     assert.equal(authorize.status, 302);
     const callback = await fetch(authorize.headers.get('location'));
@@ -119,8 +126,12 @@ async function main() {
     }, { tries: 120, label: '重启后自动连接' });
     const persisted = await call('/oauth-status', { name: 'oauthsvc' });
     assert.equal(persisted.body.state, 'authorized');
-    const after = await state();
-    assert.ok(after.refreshRequests >= 1, '临近过期时应刷新一次');
+    // Reconcile runs in the background after boot; wait for the refresh instead
+    // of racing it, otherwise this assertion is timing-dependent.
+    const after = await waitFor(async () => {
+      const snapshot = await state();
+      return snapshot.refreshRequests >= 1 ? snapshot : null;
+    }, { tries: 60, label: '重启后刷新令牌' });
     step('oauth-restart', { refreshRequests: after.refreshRequests, connected: row.status.state });
 
     const removed = await call('/mutate', { action: 'remove', name: 'oauthsvc', revision: (await call('/servers')).body.revision });

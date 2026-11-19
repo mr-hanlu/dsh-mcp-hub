@@ -131,6 +131,9 @@ color:var(--hub-text);font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe 
 .hub-banner.bad{background:color-mix(in srgb,var(--hub-bad) 10%,transparent);border-color:color-mix(in srgb,var(--hub-bad) 35%,transparent)}
 .hub-banner.warn{background:color-mix(in srgb,var(--hub-warn) 10%,transparent);border-color:color-mix(in srgb,var(--hub-warn) 35%,transparent)}
 .hub-banner.good{background:color-mix(in srgb,var(--hub-good) 10%,transparent);border-color:color-mix(in srgb,var(--hub-good) 35%,transparent)}
+.hub-row-oauth{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin:0 16px 12px 46px;padding:8px 12px;border:1px solid color-mix(in srgb,var(--hub-accent) 32%,transparent);border-radius:8px;background:color-mix(in srgb,var(--hub-accent) 8%,transparent);color:var(--hub-muted);font-size:12px;line-height:1.6}
+.hub-row-oauth>span{flex:1;min-width:140px}
+.hub-row-oauth .hub-text-button{font-size:12px!important}
 .hub-text-button{border:0;background:transparent;padding:3px;font-size:11px!important;color:var(--hub-link)!important;white-space:nowrap}
 .hub-delete-confirm{display:flex;align-items:center;gap:8px;border:1px solid var(--hub-bad);border-radius:8px;padding:12px 15px;font-size:12px}
 .hub-delete-confirm>span{flex:1}

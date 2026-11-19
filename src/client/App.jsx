@@ -811,6 +811,7 @@ function ServerRow({ server, busy, detail, detailLoading, onLoadTools, onEdit, o
       <span className="hub-avatar">{name.slice(0, 1).toUpperCase()}</span><button type="button" className="hub-server-name" onClick={() => setOpen(!open)} aria-expanded={open}><strong>{name}</strong><span><Status status={status}/><Badge>{connected ? (status.toolCount ?? tools.length) : '—'} 个工具</Badge>{MANAGED[managed] && <Badge>{MANAGED[managed]}</Badge>}{!MANAGED[managed] && <Badge>{entry?.transport === 'stdio' ? 'stdio' : entry?.transport === 'streamable-http' ? 'HTTP' : '插件管理'}</Badge>}<span className="hub-origin">{source?.app}</span><StatusNote status={status} verification={verification}/></span></button>
       <div className="hub-actions">{server.oauth && server.oauth.state !== 'authorized' && server.oauth.state !== 'none' && <button type="button" className="hub-button primary hub-row-auth" disabled={busy} onClick={() => onAction('oauth', server)}>{server.oauth.state === 'authorizing' ? '继续授权' : server.oauth.state === 'failed' ? '重新授权' : '授权'}</button>}{verifying && <IconButton icon="close" label={'取消验证 ' + name} disabled={busy} onClick={() => onAction('cancel', server)}/>}<IconButton icon="edit" label={'编辑 ' + name} disabled={!server.editable || busy} onClick={() => onEdit(server)}/><IconButton icon="refresh" label={'重启 ' + name} disabled={status.state === 'disabled' || !server.editable || busy} onClick={() => onAction('restart', server)}/><IconButton icon="trash" label={'删除 ' + name} className="danger" disabled={!server.removable || busy} onClick={() => onAction('remove', server)}/><button type="button" className="hub-switch" role="switch" aria-label={'启用 ' + name} aria-checked={entry?.enabled !== false && !!entry} disabled={!server.editable || busy} onClick={() => onAction('toggle', server)}><span/></button></div>
     </div>
+    {server.oauth?.state === 'authorizing' && <div className="hub-row-oauth" role="status"><Icon name="info" size={15}/><span>等待浏览器完成授权；如果页面没打开可以</span>{server.oauth.url && <a className="hub-text-button" href={server.oauth.url} target="_blank" rel="noopener noreferrer">重新打开授权页</a>}<button type="button" className="hub-text-button" disabled={busy} onClick={() => onAction('oauth-cancel', server)}>取消授权</button></div>}
     {open && <div className="hub-server-details"><div className="hub-detail-tabs">{[['tools','工具'],['config','配置'],['diagnostics','诊断']].map(([id,label]) => <button type="button" key={id} className={id === detailTab ? 'active' : ''} onClick={() => setDetailTab(id)}>{label}{id === 'tools' && <small>{status.toolCount ?? tools.length}</small>}</button>)}</div>
       {detailTab === 'tools' && <div className="hub-tools"><div className="hub-detail-heading"><span>服务提供的工具</span>{rows.length > 3 && <input aria-label={'搜索 ' + name + ' 的工具'} value={query} onChange={event => setQuery(event.target.value)} placeholder="搜索工具…"/>}</div>{loading && <p className="hub-help" role="status"><i className="hub-spinner"/>正在读取工具参数…</p>}{!rows.length && !loading && <p className="hub-help">{connected ? '服务已连接，但没有返回工具；工具清单由保存后的正式连接重新获取，可在「诊断」中复诊。' : '服务连接成功后，这里将显示可用工具。'}</p>}{connected && !!rows.length && <p className="hub-help">工具清单来自保存后的正式连接，不沿用添加页的测试结果。</p>}{rows.filter(tool => (tool.name + tool.description).toLowerCase().includes(query.toLowerCase())).map(tool => <details className="hub-tool" key={tool.fullName ?? tool.name}><summary><Icon name="bolt" size={15}/><code>{tool.name}</code><Icon name="chevron" size={14}/></summary><p>{tool.description || '无描述'}</p>{tool.schema ? <pre>{JSON.stringify(tool.schema, null, 2)}</pre> : <p className="hub-help">展开后加载参数 Schema。</p>}</details>)}</div>}
       {detailTab === 'config' && <div className="hub-config"><div className="hub-definition"><span>配置归属</span><strong>{MANAGED[managed] ?? 'DSH 全局配置'}</strong><span>导入来源</span><strong>{source?.app ?? 'DSH'}</strong>{source?.path && <><span>来源文件</span><code>{source.path}</code></>}</div><pre>{JSON.stringify(entry, null, 2)}</pre><p className="hub-help">凭据按字段名隐藏；普通环境变量与启动参数按原值显示。</p></div>}
@@ -1002,7 +1003,6 @@ export function App({ request = apiRequest, preview = false, locale }) {
   const [error, setError] = useState('');
   const [loadError, setLoadError] = useState('');
   const [notice, setNotice] = useState(null);
-  const [oauthLink, setOauthLink] = useState(null);
   const oauthPolling = useRef(new Set());
   const [noticePaused, setNoticePaused] = useState(false);
   const [deleteError, setDeleteError] = useState('');
@@ -1164,12 +1164,6 @@ export function App({ request = apiRequest, preview = false, locale }) {
       setError(textError(error));
     }
   }
-  async function cancelOAuthPrompt() {
-    const pending = oauthLink;
-    setOauthLink(null);
-    if (!pending) return;
-    try { await request('/oauth-cancel', { name: pending.name }); } catch {}
-  }
   async function pollOAuth(name) {
     if (oauthPolling.current.has(name)) return;
     oauthPolling.current.add(name);
@@ -1179,24 +1173,34 @@ export function App({ request = apiRequest, preview = false, locale }) {
         const status = await request('/oauth-status', { name });
         if (status.state === 'authorized') {
           notify(`已授权 ${name}，正在重新连接`);
-          setOauthLink(link => (link?.name === name ? null : link));
           await refresh(true);
           return;
         }
         if (status.state === 'failed') {
           setError(status.error || 'OAuth 授权失败');
-          setOauthLink(link => (link?.name === name ? null : link));
           await refresh(true);
           return;
         }
         if (status.state === 'needs-auth' || status.state === 'none') { await refresh(true); return; }
-        if (status.state === 'cancelled') { setOauthLink(link => (link?.name === name ? null : link)); await refresh(true); return; }
+        if (status.state === 'cancelled') { await refresh(true); return; }
       }
       await refresh(true);
     } catch { try { await refresh(true); } catch {} }
     finally { oauthPolling.current.delete(name); }
   }
+  useEffect(() => {
+    // Rows may already be authorizing (page reload, another window, or a second
+    // server): keep polling each of them so every row resolves on its own.
+    for (const server of data?.servers ?? []) if (server.oauth?.state === 'authorizing') void pollOAuth(server.name);
+  }, [data]);
   async function action(action, server, confirmed = false) {
+    if (action === 'oauth-cancel') {
+      setBusy(server.name); setError('');
+      try { await request('/oauth-cancel', { name: server.name }); await refresh(true); }
+      catch (error) { setError(textError(error)); }
+      finally { setBusy(''); }
+      return;
+    }
     if (action === 'oauth') {
       setBusy(server.name); setError('');
       try {
@@ -1204,7 +1208,7 @@ export function App({ request = apiRequest, preview = false, locale }) {
         // process launches the system browser for us.
         const started = await request('/oauth-start', { name: server.name, open: true });
         if (started?.state === 'authorized') { await refresh(true); return; }
-        setOauthLink({ name: server.name, url: started.url });
+        await refresh(true);
         void pollOAuth(server.name);
       } catch (error) {
         setError(textError(error));
@@ -1274,7 +1278,6 @@ export function App({ request = apiRequest, preview = false, locale }) {
     <p className="hub-description">连接、管理你的 MCP 服务，把常用工具带到 DSH。</p>
     <nav className="hub-main-tabs" aria-label="MCP Hub 页面"><button type="button" aria-current={tab === 'installed' ? 'page' : undefined} className={tab === 'installed' ? 'active' : ''} onClick={() => setTab('installed')}><Icon name="box"/>已添加 <small>{servers.length}</small></button><button type="button" aria-current={tab === 'import' ? 'page' : undefined} className={tab === 'import' ? 'active' : ''} onClick={() => setTab('import')}><Icon name="import"/>本地导入</button><button type="button" aria-current={tab === 'catalog' ? 'page' : undefined} className={tab === 'catalog' ? 'active' : ''} onClick={() => setTab('catalog')}><Icon name="search"/>在线搜索</button></nav>
     {(error || loadError) && <div className="hub-banner bad" role="alert"><Icon name="info"/><span>{error || loadError}</span><button className="hub-text-button" onClick={() => { setError(''); refresh().catch(() => {}); }}>重试</button></div>}
-    {oauthLink && <div className="hub-banner" role="status"><Icon name="info"/><span>{oauthLink.name} 等待浏览器授权：请在打开的页面完成登录。</span><a className="hub-text-button" href={oauthLink.url} target="_blank" rel="noopener noreferrer">打开授权页面</a><button className="hub-text-button" onClick={() => setOauthLink(null)}>隐藏</button><button className="hub-text-button" onClick={cancelOAuthPrompt}>取消授权</button></div>}
     {notice && <div className={'hub-toast ' + notice.tone} role="status" onMouseEnter={()=>setNoticePaused(true)} onMouseLeave={()=>setNoticePaused(false)} onFocus={()=>setNoticePaused(true)} onBlur={()=>setNoticePaused(false)}><Icon name={notice.tone === 'good' ? 'check' : 'info'}/><span>{notice.text}</span><IconButton icon="close" label="关闭通知" onClick={() => setNotice(null)}/></div>}
     <Boundary>
     {tab === 'catalog' ? <CatalogPanel request={request} onInstall={(install, option) => setDraft({ name: install.name, entry: option.entry, initialMode: 'form', source: '官方 MCP Registry', sourcePath: install.registryName, jsonText: JSON.stringify({ mcpServers: { [install.name]: option.entry } }, null, 2), jsonFormat: 'json' })}/> : tab === 'installed' ? <>

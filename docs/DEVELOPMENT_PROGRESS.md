@@ -20,10 +20,10 @@
 - `src/host/service.js`：OAuth 行标记与状态（`needs-auth` / `authorizing` / `authorized` / `refreshing` / `failed`）、保存时不空等验证、`oauth-start` / `oauth-status` / `oauth-cancel`、按 60 秒 ticker 刷新到期前 120 秒的令牌、启动时从 grant 恢复、删除时清理记录与引用；新增 3 条路由（共 19 条）。
 - `src/host/config.js`：preflight 支持 `deferredCredentials`，允许 OAuth 行保存时把「尚未写入的引用」视为可接受，并给出「OAuth 授权后写入」的检查说明。
 - `src/client/App.jsx`：编辑页增加「认证方式」（访问令牌 / OAuth 登录），列表行在待授权时显示「授权」，顶部横幅给出授权链接与取消；切回令牌模式保存会清除 OAuth 标记。
-- 测试：`tests/oauth.test.mjs` 11 项（键名、PKCE、发现、DCR、换 token、refresh、grant 记录、回调、系统浏览器启动命令与失败兜底）；`tests/e2e/oauth.e2e.mjs` 7 步，用本地假授权服务器走真实 Host，覆盖保存、授权、连接、重启免重授权、临近过期刷新、删除清理、未知服务 404。
+- 测试：`tests/oauth.test.mjs` 11 项（键名、PKCE、发现、DCR、换 token、refresh、grant 记录、回调、系统浏览器启动命令与失败兜底）；`tests/e2e/oauth.e2e.mjs` 8 步，用本地假授权服务器走真实 Host，覆盖保存、授权、连接、重启免重授权、临近过期刷新、删除清理、未知服务 404。
 - 修复：grant payload 里的 `clientSecret: undefined` 让凭据记录无法 JSON 序列化；改为提交前做一次 JSON 往返。未知服务的 `oauth-start` 从 403 改为 404。
 
-验证：单测 **159**、`check`、`build`、`test:e2e` 38 步、`test:registry` 7 步、`test:oauth` 7 步、`test:ui` 23 步（`DSH_E2E_PORT=3207` 避开桌面占用的 3080）、`test:simulated`、`test:layout`、打包 28 文件。真实 Notion 账号验收仍留在桌面清单。
+验证：单测 **159**、`check`、`build`、`test:e2e` 38 步、`test:registry` 7 步、`test:oauth` 8 步、`test:ui` 23 步（`DSH_E2E_PORT=3207` 避开桌面占用的 3080）、`test:simulated`、`test:layout`、打包 28 文件。真实 Notion 账号验收仍留在桌面清单。
 
 ## 本轮（2026-11-19 第四段）：P0 收尾
 

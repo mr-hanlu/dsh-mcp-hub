@@ -193,6 +193,7 @@ export class HubService {
     const state = attempt && attempt.state !== 'authorized' ? attempt.state : marker.state ?? 'needs-auth';
     return {
       state,
+      url: attempt?.state === 'authorizing' ? attempt.url : undefined,
       ref: marker.ref,
       expiresAt: marker.expiresAt,
       error: attempt?.error ?? marker.error,
