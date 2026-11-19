@@ -14,7 +14,7 @@
 
 DSH MCP Hub is a settings-page plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness). It does not replace the official MCP Manager — it adds a better panel on top of it: real connection state, tool lists and failure reasons for every server, plus one-time import of servers already configured in Claude Code, Codex, Cursor, Windsurf and other clients.
 
-Current version **0.1.x**, built for DSH **0.2.x** (0.2.2+).
+Current version **0.2.x**, built for DSH **0.2.x** (0.2.2+).
 
 ## Why it exists
 

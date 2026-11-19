@@ -14,7 +14,7 @@
 
 DSH MCP Hub 是 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的设置页插件。它不替代官方 MCP Manager，而是在它之上提供一个更好用的管理面板：你能看到每个服务的真实连接状态、工具清单和失败原因，也能把 Claude Code、Codex、Cursor、Windsurf 等客户端里已经配好的服务一次性搬过来。
 
-当前版本 **0.1.x**，面向 DSH **0.2.x**（0.2.2 起）。
+当前版本 **0.2.x**，面向 DSH **0.2.x**（0.2.2 起）。
 
 ## 为什么需要它
 

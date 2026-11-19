@@ -158,3 +158,6 @@ dist/
 
 # 端到端失败截图
 tests/e2e/artifacts/
+
+# 发布产物（tarball、pack 清单、本地 release notes）
+release/

@@ -1,8 +1,8 @@
 # 后续任务
 
-更新日期：2026-11-20（Asia/Shanghai），**修订 r11**：完成 OAuth 协议核心——PRM / AS 发现、动态客户端注册、PKCE S256、本机回调、grant 记录、`${credential:…}` 引用与自动重连、临近过期刷新、删除清理；新增 `test:oauth`（8 步）与 `tests/oauth.test.mjs`（11 项），单测 159 项；编辑页增加认证方式，列表增加「授权」入口。r10 已收尾 P0（Windows 跨平台断言、永久性连接错误快速结算、`test:registry`）。
+更新日期：2026-11-19（Asia/Shanghai），**修订 r12**：OAuth 完成并准备 0.2.0 发布（发布产物改放仓库 `release/`，已忽略）。r11 修订内容为：完成 OAuth 协议核心——PRM / AS 发现、动态客户端注册、PKCE S256、本机回调、grant 记录、`${credential:…}` 引用与自动重连、临近过期刷新、删除清理；新增 `test:oauth`（8 步）与 `tests/oauth.test.mjs`（11 项），单测 159 项；编辑页增加认证方式，列表增加「授权」入口。r10 已收尾 P0（Windows 跨平台断言、永久性连接错误快速结算、`test:registry`）。
 
-当前基线：**0.1.0**，DSH 0.2.2-rc.5；单测 159 项、`test:e2e` 38 步、`test:registry` 7 步、`test:oauth` 8 步、`test:ui` 23 步、`test:simulated` 16 步、`test:layout` 4 图、打包清单 28 个文件。本文是后续工作清单，不代表这些问题均已复现为故障。源码现状和验证记录见 [开发进度](DEVELOPMENT_PROGRESS.md)；认证能力与分阶段计划见 [开发计划](DEVELOPMENT_PLAN_2026-11-17.md)；安装步骤见 [README](../README.md#安装)。
+当前基线：**0.2.0**，DSH 0.2.2-rc.5；单测 159 项、`test:e2e` 38 步、`test:registry` 7 步、`test:oauth` 8 步、`test:ui` 23 步、`test:simulated` 16 步、`test:layout` 4 图、打包清单 28 个文件。本文是后续工作清单，不代表这些问题均已复现为故障。源码现状和验证记录见 [开发进度](DEVELOPMENT_PROGRESS.md)；认证能力与分阶段计划见 [开发计划](DEVELOPMENT_PLAN_2026-11-17.md)；安装步骤见 [README](../README.md#安装)。
 
 ## P0：优先完成真实接入验收与边界处理
 
@@ -162,7 +162,7 @@
 
 ## 提交与发布约定
 
-- 本次提交统一使用 `0.1.0`；不把之前的本地临时编号写成正式发布历史，不自动创建 tag、推送或发布 npm。
+- 本次发布使用 `0.2.0`；不把之前的本地临时编号写成正式发布历史，不自动创建 tag、推送或发布 npm。
 - 版本号以 `package.json` 和 `package-lock.json` 为准；安装示例、进度文档随正式版本同步。
 - Git 提交源码、测试、锁文件和文档；忽略 `node_modules/`、`lib/`、`dist/`、本地 tarball、日志和环境文件。
 - 交付前运行适用检查，更新开发进度与待办状态；未验收的项目不能标为完成。

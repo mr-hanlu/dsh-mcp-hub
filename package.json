@@ -1,6 +1,6 @@
 {
   "name": "dsh-mcp-hub",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "DSH 的 MCP 管理面板与本机配置导入插件",
   "type": "module",
   "license": "MIT",

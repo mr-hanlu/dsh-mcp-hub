@@ -1,25 +1,31 @@
 # 开发进度
 
-更新日期：2026-11-20（Asia/Shanghai）
+更新日期：2026-11-19（Asia/Shanghai）
 
-> 收工状态：单测 159 项、`check`、`build`、`test:e2e`（stdio + 启动/重连边界 + HTTP + 凭证 + 删除后同名重加 + 宿主重启恢复 + 删除后重新导入 / 外部配置变更 / 并发保存 / 验证中关闭 / 卸载 + 非法端点快速失败，38 步）、`test:registry`（本地假 Registry 的分页 / 详情 / 失败边界，7 步）、`test:oauth`（本地假授权服务器的授权 / 刷新 / 重启 / 清理，7 步）、`test:simulated`（假 HOME + 九种客户端写法 + 各种密钥）、`test:ui`（页面主流程，23 步）、`test:layout`（浅色/深色/窄窗口）、`test:tarball`、`test:remote`（DeepWiki）、`test:real-sources`（本机真实 Codex / Claude Code 文件）全部通过；桌面实例已 link 安装并完成两轮验收，人工项已确认。CI 基础流水线与端到端作业已接入，`checks` 的 Windows runner 已真机跑绿并改为阻塞；启停后的验证结论已能刷新；密钥已统一写入 DSH 凭证服务，配置只保留引用；远程服务已支持 OAuth 登录（发现、DCR、PKCE、刷新）；删除后清理期的同名重加不再误报重名；页面剩余分支（表单补全变量、重命名引用行、失败后重测）已补齐；来源兼容矩阵用真实 Claude Code / Codex 样本建立；模拟来源功能验收覆盖了本机没装的客户端；桌面人工项整理成清单。下一步是清单里的桌面验收与其余来源的真实文件，见 [后续任务](NEXT_TASKS.md#下一次开发的建议顺序)。
+> 收工状态：单测 159 项、`check`、`build`、`test:e2e`（stdio + 启动/重连边界 + HTTP + 凭证 + 删除后同名重加 + 宿主重启恢复 + 删除后重新导入 / 外部配置变更 / 并发保存 / 验证中关闭 / 卸载 + 非法端点快速失败，38 步）、`test:registry`（本地假 Registry 的分页 / 详情 / 失败边界，7 步）、`test:oauth`（本地假授权服务器的授权 / 刷新 / 重启 / 清理，8 步）、`test:simulated`（假 HOME + 九种客户端写法 + 各种密钥）、`test:ui`（页面主流程，23 步）、`test:layout`（浅色/深色/窄窗口）、`test:tarball`、`test:remote`（DeepWiki）、`test:real-sources`（本机真实 Codex / Claude Code 文件）全部通过；桌面实例已 link 安装并完成两轮验收，人工项已确认。CI 基础流水线与端到端作业已接入，`checks` 的 Windows runner 已真机跑绿并改为阻塞；启停后的验证结论已能刷新；密钥已统一写入 DSH 凭证服务，配置只保留引用；远程服务已支持 OAuth 登录（发现、DCR、PKCE、刷新）；删除后清理期的同名重加不再误报重名；页面剩余分支（表单补全变量、重命名引用行、失败后重测）已补齐；来源兼容矩阵用真实 Claude Code / Codex 样本建立；模拟来源功能验收覆盖了本机没装的客户端；桌面人工项整理成清单。下一步是清单里的桌面验收与其余来源的真实文件，见 [后续任务](NEXT_TASKS.md#下一次开发的建议顺序)。
 
 ## 当前版本与状态
 
-- 首个正式版本号统一为 **0.1.0**；开发期间的本地临时版本号不计入正式发布历史。
+- 首个正式版本号统一为 **0.1.0**；OAuth 发布版本为 **0.2.0**；开发期间的本地临时版本号不计入正式发布历史。
 - 当前交付为 DSH 插件源码、可构建的浏览器模块、本地预览、测试及安装打包流程。
 - 已创建 `v0.1.0` Release 并向插件市场提交收录 PR（awesome-dsh-plugin #16848，等待维护者合并）；尚未发布到 npm（同名包被占位）。Git 提交由本地完成，push 由仓库维护者执行。
 - 功能重点为「已添加」「本地导入」「在线搜索」与远程服务的 OAuth 登录；在线搜索只接官方 MCP Registry，选择后预填编辑页，不静默安装。
 - 桌面 `desktop` profile 已用 link 方式安装：`~/.dsh/profiles/desktop/package.json` 里 `dsh-mcp-hub` 指向本仓库，bundles 也含它；两轮验收见下文。重启恢复、凭证缺失拒绝与官方 Manager 行边界已转成自动化；桌面注入的主题变量、窄窗口观感与凭证缺失时的界面文案已由维护者人工确认。
 
-## 本轮（2026-11-20）：OAuth 协议核心
+## 发布 0.2.0
+
+- `package.json` 升到 **0.2.0**；README / README.en 版本改为 0.2.x，后续任务与计划基线同步。
+- 发布产物放在仓库内 `release/`（已加入 `.gitignore`）：`dsh-mcp-hub.tgz`（28 个文件，含 `lib/client.js`）、`pack.json` 与 `notes-0.2.0.md`，校验脚本通过。
+- 待办：打 tag `v0.2.0`、创建 GitHub Release 并上传 `dsh-mcp-hub.tgz`；市场条目沿用同一 tarball 地址，用户端通过 Update 升级。
+
+## 本轮（2026-11-19）：OAuth 协议核心
 
 远程 MCP 服务的 OAuth 登录从方案验证推进到可用实现，范围是「发现 → 动态注册 → PKCE → 回调 → 换 token → 写凭证 → 自动重连 → 刷新 → 删除清理」。
 
 - 新增 `src/host/oauth.js`：PRM（RFC 9728）与 AS metadata（RFC 8414 / OIDC）发现、DCR（RFC 7591）、PKCE S256、loopback 回调、授权码与 refresh 交换、grant 归一化。
 - `src/host/service.js`：OAuth 行标记与状态（`needs-auth` / `authorizing` / `authorized` / `refreshing` / `failed`）、保存时不空等验证、`oauth-start` / `oauth-status` / `oauth-cancel`、按 60 秒 ticker 刷新到期前 120 秒的令牌、启动时从 grant 恢复、删除时清理记录与引用；新增 3 条路由（共 19 条）。
 - `src/host/config.js`：preflight 支持 `deferredCredentials`，允许 OAuth 行保存时把「尚未写入的引用」视为可接受，并给出「OAuth 授权后写入」的检查说明。
-- `src/client/App.jsx`：编辑页增加「认证方式」（访问令牌 / OAuth 登录），列表行在待授权时显示「授权」，顶部横幅给出授权链接与取消；切回令牌模式保存会清除 OAuth 标记。
+- `src/client/App.jsx`：编辑页增加「认证方式」（访问令牌 / OAuth 登录），列表行在待授权时显示「授权」，授权中的提示与「重新打开授权页 / 取消授权」都在该行内，可同时授权多个；切回令牌模式保存会清除 OAuth 标记。
 - 测试：`tests/oauth.test.mjs` 11 项（键名、PKCE、发现、DCR、换 token、refresh、grant 记录、回调、系统浏览器启动命令与失败兜底）；`tests/e2e/oauth.e2e.mjs` 8 步，用本地假授权服务器走真实 Host，覆盖保存、授权、连接、重启免重授权、临近过期刷新、删除清理、未知服务 404。
 - 修复：grant payload 里的 `clientSecret: undefined` 让凭据记录无法 JSON 序列化；改为提交前做一次 JSON 往返。未知服务的 `oauth-start` 从 403 改为 404。
 
