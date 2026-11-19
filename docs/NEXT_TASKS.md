@@ -2,7 +2,7 @@
 
 更新日期：2026-11-19（Asia/Shanghai），**修订 r9**：补完 P0-5 的四类端到端（删除后重新导入、外部配置变更、并发连续操作、验证中关闭与卸载）；新增 tarball 安装、真实公网 MCP、真实来源文件三个可选验收脚本；`test:e2e` 增至 37 步。r8 已完成 Windows 命令探测（PATH / PATHEXT）、Windows CI 报告模式、宿主重启恢复、凭证缺失与官方 Manager 边界自动化、集成测试去硬编码。
 
-当前基线：**0.1.0**，DSH 0.2.2-rc.5；单测 147 项、`test:e2e` 37 步、`test:ui` 23 步、`test:simulated` 16 步、`test:layout` 4 图、打包清单 26 个文件。本文是后续工作清单，不代表这些问题均已复现为故障。源码现状和验证记录见 [开发进度](DEVELOPMENT_PROGRESS.md)；认证能力与分阶段计划见 [开发计划](DEVELOPMENT_PLAN_2026-11-17.md)；安装步骤见 [README](../README.md#安装)。
+当前基线：**0.1.0**，DSH 0.2.2-rc.5；单测 147 项、`test:e2e` 37 步、`test:ui` 23 步、`test:simulated` 16 步、`test:layout` 4 图、打包清单 27 个文件。本文是后续工作清单，不代表这些问题均已复现为故障。源码现状和验证记录见 [开发进度](DEVELOPMENT_PROGRESS.md)；认证能力与分阶段计划见 [开发计划](DEVELOPMENT_PLAN_2026-11-17.md)；安装步骤见 [README](../README.md#安装)。
 
 ## P0：优先完成真实接入验收与边界处理
 
@@ -80,7 +80,7 @@
 
 ### 6. 接入 CI
 
-`.github/workflows/ci.yml` 已接入；本地基线先跑通（单测 147 项、`check`、`build`、四条端到端、打包清单 26 个文件全部通过）。`checks` 同时在 `windows-latest` 与 `ubuntu-latest` 上跑，Windows 先设为 `continue-on-error`（报告模式），等真机全绿后再改成阻塞。
+`.github/workflows/ci.yml` 已接入；本地基线先跑通（单测 147 项、`check`、`build`、四条端到端、打包清单 27 个文件全部通过）。`checks` 同时在 `windows-latest` 与 `ubuntu-latest` 上跑，Windows 先设为 `continue-on-error`（报告模式），等真机全绿后再改成阻塞。
 
 - [x] 基础流水线：`npm ci` → `npm test` → `npm run check` → `npm run build` → `npm pack --dry-run --json --ignore-scripts` 交给 `scripts/assert-pack.mjs` 断言包内容（`lib/client.js`、`lib/style.css`、`cordis.patch.yml`、`locale/`、`icon.svg`、`src/host`、`src/shared`、`README.md`、`LICENSE`），并断言复审报告不进包。这一层不需要 DSH，公开 runner 即可。
 - [x] 端到端流水线（需要装了 DSH 的机器）：`npm run test:e2e` 与 `npm run test:ui` 串行跑在一个带 `dsh` 标签的自托管 runner 上，由仓库变量 `DSH_E2E_RUNNER=true` 打开（未打开时整个 job 跳过，不会挂起）。CI 里设 `DSH_E2E_REQUIRED=1`，把「找不到 dsh / Chrome」从 SKIP 变成失败——否则 runner 没装 DSH 时会绿灯通过但什么都没测。
@@ -130,7 +130,7 @@
 
 - [x] 官方 `@deepseek-ai/*` 包移出 `dependencies`，改为 peer + dev；补 `engines.dsh` 声明兼容范围。
 - [x] 集成测试不再硬编码 `0.2.2-rc.3`（2026-11-19）：缺 `DSH_TEST_MODULES` 时只指向 README；能从 `@deepseek-ai/dsh-app-boot` 读出版本时，按 `engines.dsh >=0.2.2-0 <0.3.0-0` 校验，不符直接报出实际版本。README 安装示例同步到已验证的 `0.2.2-rc.5`。
-- [x] 打包后核对 `files` 白名单（2026-11-19）：`npm run test:tarball` 实际 `npm pack` 后装进全新临时 profile，确认 26 个文件、`lib/client.js` 与宿主入口在包内、插件层加载、接口可用。
+- [x] 打包后核对 `files` 白名单（2026-11-19）：`npm run test:tarball` 实际 `npm pack` 后装进全新临时 profile，核对打包清单（本次 27 个文件）、`lib/client.js` 与宿主入口在包内、插件层加载、接口可用。
 - [ ] `devDependencies` 里的 `@deepseek-ai/dsh-mcp-client` 仍锁 `0.2.2-rc.3`：`rc.5` 的客户端要求整套 `@deepseek-ai/dsh-llm@0.2.2-rc.5` 等 peer，直接升级会 `ERESOLVE`。link 安装时 `probeServer` 因此来自 rc.3 副本；要么和宿主包一起升级并重跑全部 e2e，要么在文档里明确 link 验收实际用的是 rc.3 客户端（tarball 验收用的是宿主副本）。
 
 ### 工具权限与调用测试
@@ -150,7 +150,7 @@
 
 ## 下一次开发的建议顺序
 
-截至 2026-11-19（r9）：安装、Host 侧验收、`test:e2e`（37 步，新增宿主重启恢复与阶段 4/5）、`test:ui`（23 步）、`test:simulated`（模拟九种客户端 + 各种密钥写法）、`test:layout`（浅色/深色/窄窗口）、CI（含 Windows 报告模式）、启停后重新验证、密钥统一写入 DSH 凭证服务、行内查看/复制/编辑密钥、删除后清理期同名重加、来源兼容矩阵、Windows 命令探测、无凭证服务与官方 Manager 行边界、删除后重新导入 / 外部配置变更 / 并发保存 / 验证中关闭 / 卸载后 404 都已完成；`test:tarball`、`test:remote`、`test:real-sources` 三个可选验收也已跑通；本地基线全绿（单测 147 项、`check`、`build`、四条端到端脚本、打包清单 26 个文件）。
+截至 2026-11-19（r9）：安装、Host 侧验收、`test:e2e`（37 步，新增宿主重启恢复与阶段 4/5）、`test:ui`（23 步）、`test:simulated`（模拟九种客户端 + 各种密钥写法）、`test:layout`（浅色/深色/窄窗口）、CI（含 Windows 报告模式）、启停后重新验证、密钥统一写入 DSH 凭证服务、行内查看/复制/编辑密钥、删除后清理期同名重加、来源兼容矩阵、Windows 命令探测、无凭证服务与官方 Manager 行边界、删除后重新导入 / 外部配置变更 / 并发保存 / 验证中关闭 / 卸载后 404 都已完成；`test:tarball`、`test:remote`、`test:real-sources` 三个可选验收也已跑通；本地基线全绿（单测 147 项、`check`、`build`、四条端到端脚本、打包清单 27 个文件）。
 
 1. 复现基线：`npm ci && npm test && npm run check && npm run build`，再**串行**跑 `npm run test:e2e` 与 `npm run test:ui`（各约 1–2 分钟；两者都默认占 `127.0.0.1:3080`，并行会 EADDRINUSE）。推送后确认 CI 的 checks 作业（Ubuntu 为阻塞项，Windows 目前只报告）通过；要跑端到端按 README「持续集成」挂 runner。
 2. **补 P0-1 剩余的人工项**（桌面注入的 `--dsw-alias-*` 主题与窄窗口、凭证缺失 / 凭证服务不可用时的界面观感、官方 Manager 已有服务边界），这些只能在桌面实例上验；重启恢复、凭证拒绝与 Manager 行边界已在自动化里锁定，人工只需复核界面。

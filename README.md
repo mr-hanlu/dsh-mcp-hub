@@ -1,12 +1,20 @@
 # DSH MCP Hub
 
+<p>
+  <a href="README.md"><img alt="简体中文（当前语言）" src="assets/lang-zh-on.svg" height="32"></a>
+  &nbsp;
+  <a href="README.en.md"><img alt="English" src="assets/lang-en-off.svg" height="32"></a>
+</p>
+
 > 把散落在各个 AI 客户端里的 MCP 配置，收进 DSH 的一个页面：扫描导入、逐项验证、启停排障，密钥统一交给 DSH 凭证服务保管。
 
-[![CI](https://github.com/mr-hanlu/dsh-mcp-hub/actions/workflows/ci.yml/badge.svg)](https://github.com/mr-hanlu/dsh-mcp-hub/actions/workflows/ci.yml) [![DSH](https://img.shields.io/badge/DSH-0.2.2%E7%B3%BB-4f46e5)](https://github.com/deepseek-ai/deepseek-harness) [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![CI](https://github.com/mr-hanlu/dsh-mcp-hub/actions/workflows/ci.yml/badge.svg)](https://github.com/mr-hanlu/dsh-mcp-hub/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/release/mr-hanlu/dsh-mcp-hub)](https://github.com/mr-hanlu/dsh-mcp-hub/releases) [![DSH](https://img.shields.io/badge/DSH-0.2.x-4f46e5)](https://github.com/deepseek-ai/deepseek-harness) [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+
+![MCP Hub 服务列表](assets/screenshots/servers.png)
 
 DSH MCP Hub 是 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的设置页插件。它不替代官方 MCP Manager，而是在它之上提供一个更好用的管理面板：你能看到每个服务的真实连接状态、工具清单和失败原因，也能把 Claude Code、Codex、Cursor、Windsurf 等客户端里已经配好的服务一次性搬过来。
 
-当前版本 **0.1.0**，面向 DSH **0.2.2** 系。
+当前版本 **0.1.x**，面向 DSH **0.2.x**（0.2.2 起）。
 
 ## 为什么需要它
 
@@ -31,48 +39,59 @@ MCP 配置通常藏在十几个 JSON / TOML 文件里，改一个命令要翻目
 
 ## 安装
 
-### 准备
+### 系统要求
 
-- DSH **0.2.2** 系（当前验证版本 `0.2.2-rc.5`）；
-- Node `^22.19.0 || >=24` 与 npm，仅用于构建和测试，插件本身运行在 DSH Host 内；
+- DSH **0.2.2 及以上**（只覆盖 0.2.x；`engines.dsh` 为 `>=0.2.2-0 <0.3.0-0`）；
 - 只支持 `stdio` 与 `streamable-http`，`sse` 明确不支持。
+
+安装不需要 Node 或 npm；只有从源码运行、构建和测试时才需要。
+
+### 方式 A：插件市场（dshmarket，推荐）
+
+在 DSH 的 **插件页 → 市场** 搜索 **dsh-mcp-hub**，安装后打开 **设置 → MCP Hub**。
+
+条目已提交收录，审核期间可能还搜不到；搜不到时用方式 B。
+
+### 方式 B：Release 安装（当前推荐）
+
+1. 下载 [dsh-mcp-hub.tgz](https://github.com/mr-hanlu/dsh-mcp-hub/releases/latest/download/dsh-mcp-hub.tgz)；
+2. 桌面应用：**插件 → 添加插件** → 选择这个 `.tgz` 文件（或填入它的绝对路径）；
+3. CLI：
+
+   ```sh
+   dsh plugin --profile <profile> add "$HOME/Downloads/dsh-mcp-hub.tgz"
+   ```
+
+4. 按桌面提示重启，或重启对应的 `dsh web`；打开 **设置 → MCP Hub**。
+
+Release 包走 `files` 白名单，使用宿主自带的官方依赖，是“用户实际装到的包”的真实形态。
+
+### 方式 C：源码 link（开发 / 调试）
 
 ```sh
 git clone https://github.com/mr-hanlu/dsh-mcp-hub.git
 cd dsh-mcp-hub
 npm ci
-npm run build     # 生成 lib/client.js 与 lib/style.css，插件页加载的就是这两个文件
+npm run build    # 生成 lib/client.js 与 lib/style.css，插件页加载的就是这两个文件
 ```
 
-### 方式 A：桌面应用（推荐）
+桌面应用：**添加插件** → 输入仓库的绝对路径。CLI：
 
-桌面应用独占 `desktop` profile，`dsh plugin` 无法操作它，所以走界面：
-
-1. 打开 DSH → 侧边栏 **插件**；
-2. **添加插件** → 输入本仓库的绝对路径（如 `/Users/<you>/Desktop/my/dsh-mcp-hub`）→ 确认；
-3. 确认 **MCP Hub** 行为启用状态；
-4. 打开 **设置 → MCP Hub**。
+```sh
+dsh plugin --profile hub-dev add "$PWD"
+```
 
 本地目录是 **link 安装**：改代码后需要重新 `npm run build` 并重启 DSH 才会生效。
 
-### 方式 B：独立 CLI profile（隔离验证）
+### 升级与卸载
 
-```sh
-DSH="/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh"
-"$DSH" plugin --profile hub-dev add /Users/<you>/Desktop/my/dsh-mcp-hub
-"$DSH" --profile hub-dev --dump-config | grep -n "dsh-mcp-hub"
-"$DSH" --profile hub-dev web
-```
+- **市场**：插件行上出现 Update 时点一下即可；卸载也在市场卡片里。
+- **Release**：下载新版本 `.tgz` 重新添加，同一插件会被替换，配置与密钥保留。
+- **CLI**：`dsh plugin --profile <profile> remove dsh-mcp-hub`。
 
-删除：`"$DSH" plugin --profile hub-dev remove dsh-mcp-hub`。`dsh` 已在 PATH 时可去掉 `DSH=` 前缀。
-
-### 方式 C：tarball（验证真实发布形态）
-
-```sh
-npm pack     # prepack 会自动 build
-```
-
-在 **添加插件** 里输入 tarball 的绝对路径。tarball 不 link，`files` 白名单生效，适合验证“用户实际装到的包”。
+> **npm 上的 `dsh-mcp-hub` 是他人占位包，不是本项目。** 不要用 `dsh plugin add dsh-mcp-hub` 按包名安装。
+>
+> **不要用 `github:mr-hanlu/dsh-mcp-hub` 源码安装**：构建产物 `lib/` 不在仓库里，源码安装会缺 `lib/client.js`，插件页显示不出来。请用方式 A 或 B。
 
 ### 装好后确认
 
@@ -83,12 +102,8 @@ npm pack     # prepack 会自动 build
 ## 兼容性
 
 - `package.json` 的 `engines.dsh`（`>=0.2.2-0 <0.3.0-0`）是唯一判据，不满足时 DSH 拒绝加载并列出未满足项。
-- 官方包声明为 `peerDependencies`，`devDependencies` 只供本地构建；**link 安装**会优先用仓库的 dev 副本，只有 tarball / 注册表安装才真正使用宿主副本——所以“宿主副本是否兼容”要靠方式 C 验证。
-- 确需跨范围验证时使用官方豁免（写入 profile 的 `compatibility.json`，升级后需重新授权）：
-
-```sh
-"$DSH" plugin --profile hub-dev allow-version dsh-mcp-hub@0.1.0 --dsh-version 0.2.2-rc.5 --accept-risk
-```
+- 官方 `@deepseek-ai/*` 包声明为 `peerDependencies`，`devDependencies` 只供本地构建；**link 安装**会优先用仓库的 dev 副本，只有 tarball / 市场安装才真正使用宿主副本。判断宿主兼容性请以 Release 安装为准。
+- 确需跨版本范围验证时，使用官方版本豁免（`dsh plugin allow-version`，升级后需重新授权）。
 
 ## 使用
 

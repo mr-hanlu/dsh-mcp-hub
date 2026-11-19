@@ -7,6 +7,7 @@
 | 文档 | 给谁看 | 状态 |
 | --- | --- | --- |
 | [README](../README.md) | 第一次接触项目的人：它是什么、怎么装、怎么开始 | 持续更新 |
+| [English README](../README.en.md) | English-speaking users: what it is, install, quick start | 持续更新 |
 | [使用说明](USAGE.md) | 已装好的用户：导入、验证、密钥、在线搜索、配置项 | 持续更新 |
 | [桌面实例验收](DESKTOP_ACCEPTANCE.md) | 维护者：只能在真实桌面里确认的主题、窄窗、官方 Manager 边界 | 持续更新（清单） |
 

@@ -1,5 +1,5 @@
 /**
- * 端到端验收（打包安装）：模拟 README 安装方式 C——`npm pack` 出 tarball，
+ * 端到端验收（打包安装）：模拟 README 的方式 B（Release 安装）——`npm pack` 出 tarball，
  * 装进一个全新的临时 profile，确认插件层、接口和页面资源都来自压缩包，
  * 而不是「从仓库目录 link 安装」这条开发路径。
  *

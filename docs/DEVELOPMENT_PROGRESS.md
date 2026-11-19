@@ -24,9 +24,9 @@
 | `tests/README.md`（新增） | 测试分层表、9 个单测文件各自的覆盖点、集成与 7 个 e2e 脚本的阶段说明、环境变量、建议顺序、常见问题与写测试约定。 |
 | `src/client/i18n.js` | 删除撤销入口移除后不再使用的词条与正则（`关闭撤销提示`、`撤销`、`没有可撤销的服务`、`已撤销 N 个…`、`已添加 N 个服务` 正则）；`i18n.test.mjs` 改用仍在使用的动态消息做断言。 |
 | `package.json` | 补 `repository` / `homepage` / `bugs`，description 改为面向用户的一句话。 |
-| 计数 | 打包清单因新增两份文档变为 **26 个文件**；单测仍 147 项。 |
+| 计数 | 打包清单在加入英文 README（`README.en.md`）后为 **27 个文件**；单测仍 147 项。 |
 
-验证：`npm test` 147 项、`npm run check`、`npm run build`、`scripts/assert-pack.mjs`（26 个文件）通过；README / USAGE / docs 索引 / tests 说明的相对链接全部检查过。
+验证：`npm test` 147 项、`npm run check`、`npm run build`、`scripts/assert-pack.mjs`（27 个文件）通过；README / USAGE / docs 索引 / tests 说明的相对链接全部检查过。
 
 ## 本轮（2026-11-19 第二段）：P0-5 四类边界与可选真实链路
 
@@ -38,12 +38,12 @@
 | `tests/service.test.mjs` | 新增「a verification interrupted by a Host shutdown is settled instead of staying verifying」：临时 metaPath 写入 `verifying` → `init()` → 行结论为 `failed` 且重新落盘。总单测 146 → **147**。 |
 | `tests/e2e/web-profile.e2e.mjs` | 新增阶段 4（删除后重新导入、外部 `cordis.patch.yml` 热加载 / 恢复、同一 revision 并发三写）与阶段 5（慢验证中停 Host、`plugin remove` 后 404）；`test:e2e` 31 → **37 步**。两处产品口径在此确认：外部手改落在 Manager 宿主层，按不可编辑 / 不可删除的宿主行展示；强杀后验证结论可能为空，但绝不伪报成功。 |
 | `tests/e2e/support/profile.mjs` | `createProfile({ install })` 允许建空 profile（tarball 验收要从包安装）；`bootProfile({ probe })` 允许跳过启动探测（卸载后 `/servers` 已 404）。 |
-| `tests/e2e/tarball.e2e.mjs` | `npm run test:tarball`：构建 → `npm pack` → 装进全新 profile → 断言 26 个文件、`lib/client.js`、插件层、`/servers` 与 `/status` 可用。修了 npm 11 `pack --json` 返回「包名 → 信息」对象而不是数组的兼容问题。 |
+| `tests/e2e/tarball.e2e.mjs` | `npm run test:tarball`：构建 → `npm pack` → 装进全新 profile → 核对打包清单（本次 27 个文件）、`lib/client.js`、插件层、`/servers` 与 `/status` 可用。修了 npm 11 `pack --json` 返回「包名 → 信息」对象而不是数组的兼容问题。 |
 | `tests/e2e/real-remote.e2e.mjs` | `DSH_E2E_REMOTE=1 npm run test:remote`：真实 DeepWiki（`https://mcp.deepwiki.com/mcp`）测试连接、保存、验证、工具发现。实测 516ms、3 个工具。 |
 | `tests/e2e/real-sources.e2e.mjs` | `DSH_E2E_REAL_SOURCES=1 npm run test:real-sources`：扫描本机真实客户端配置。插件固定按真实 home 扫描，与 `DSH_HOME` 无关。实测 Codex `.codex/config.toml` 2 个服务、Claude Code `.claude.json` 可读。 |
 | `README.md` / `docs/NEXT_TASKS.md` / 本文 | 补阶段 3/4/5 与三个可选脚本说明，基线改为 147 项 / 37 步；NEXT_TASKS 改为 r9，并把「验证结论只在结算时落盘」记为已知边界。 |
 
-验证：`npm test` 147 项、`npm run check`、`npm run build`、`npm run test:e2e`（37 步）、`npm run test:ui`（23 步）、`npm run test:simulated`（16 步）、`npm run test:layout`（4 张截图）、`npm run test:tarball`、`DSH_E2E_REMOTE=1 npm run test:remote`、`DSH_E2E_REAL_SOURCES=1 npm run test:real-sources` 全部通过；`npm pack --dry-run` 为 26 个文件（新增使用说明与文档索引）。
+验证：`npm test` 147 项、`npm run check`、`npm run build`、`npm run test:e2e`（37 步）、`npm run test:ui`（23 步）、`npm run test:simulated`（16 步）、`npm run test:layout`（4 张截图）、`npm run test:tarball`、`DSH_E2E_REMOTE=1 npm run test:remote`、`DSH_E2E_REAL_SOURCES=1 npm run test:real-sources` 全部通过；`npm pack --dry-run` 为 27 个文件（含新增英文 README）。
 
 ## 本轮（2026-11-19）：Windows 命令探测、宿主重启恢复与边界自动化
 

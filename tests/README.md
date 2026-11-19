@@ -83,7 +83,7 @@ Chrome 默认取 macOS 路径，可用 `CHROME_PATH` 指定；`DSH_E2E_CHROME_PA
 
 ### tarball：`npm run test:tarball`
 
-`tests/e2e/tarball.e2e.mjs` 构建 → `npm pack` → 装进全新临时 profile，断言 26 个文件、`lib/client.js`、插件层与接口可用。对应 README 的安装方式 C，验证“用户实际装到的包”。
+`tests/e2e/tarball.e2e.mjs` 构建 → `npm pack` → 装进全新临时 profile，核对打包清单（当前 27 个文件）、`lib/client.js`、插件层与接口可用。对应 README 的方式 B（Release 安装），验证“用户实际装到的包”。
 
 ### 可选的真实链路
 
