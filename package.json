@@ -1,7 +1,7 @@
 {
   "name": "dsh-mcp-hub",
   "version": "0.1.0",
-  "description": "DSH MCP 管理与本机配置导入",
+  "description": "DSH 的 MCP 管理面板与本机配置导入插件",
   "type": "module",
   "license": "MIT",
   "main": "src/host/index.js",
@@ -40,7 +40,10 @@
     "test:e2e": "node tests/e2e/web-profile.e2e.mjs",
     "test:ui": "node tests/e2e/ui-page.e2e.mjs",
     "test:layout": "node tests/e2e/ui-layout.e2e.mjs",
-    "test:simulated": "node tests/e2e/simulated-sources.e2e.mjs"
+    "test:simulated": "node tests/e2e/simulated-sources.e2e.mjs",
+    "test:tarball": "node tests/e2e/tarball.e2e.mjs",
+    "test:remote": "node tests/e2e/real-remote.e2e.mjs",
+    "test:real-sources": "node tests/e2e/real-sources.e2e.mjs"
   },
   "dependencies": {
     "jsonc-parser": "^3.3.1",
@@ -84,5 +87,13 @@
         "@deepseek-ai/dsh-client-ui-settings"
       ]
     }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mr-hanlu/dsh-mcp-hub.git"
+  },
+  "homepage": "https://github.com/mr-hanlu/dsh-mcp-hub#readme",
+  "bugs": {
+    "url": "https://github.com/mr-hanlu/dsh-mcp-hub/issues"
   }
 }
