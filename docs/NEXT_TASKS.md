@@ -1,24 +1,24 @@
 # 后续任务
 
-更新日期：2026-11-19（Asia/Shanghai），**修订 r9**：补完 P0-5 的四类端到端（删除后重新导入、外部配置变更、并发连续操作、验证中关闭与卸载）；新增 tarball 安装、真实公网 MCP、真实来源文件三个可选验收脚本；`test:e2e` 增至 37 步。r8 已完成 Windows 命令探测（PATH / PATHEXT）、Windows CI 报告模式、宿主重启恢复、凭证缺失与官方 Manager 边界自动化、集成测试去硬编码。
+更新日期：2026-11-19（Asia/Shanghai），**修订 r10**：P0 收尾——Windows 单元测试的路径断言改为跨平台；非法端口 / DNS 不存在等永久性连接错误改为立即结算；新增本地假 Registry 的边界端到端（`test:registry`，7 步）；维护者确认桌面人工项；`test:e2e` 增至 38 步、单测 148 项。r9 已补完 P0-5 四类端到端与三个可选验收脚本。
 
-当前基线：**0.1.0**，DSH 0.2.2-rc.5；单测 147 项、`test:e2e` 37 步、`test:ui` 23 步、`test:simulated` 16 步、`test:layout` 4 图、打包清单 27 个文件。本文是后续工作清单，不代表这些问题均已复现为故障。源码现状和验证记录见 [开发进度](DEVELOPMENT_PROGRESS.md)；认证能力与分阶段计划见 [开发计划](DEVELOPMENT_PLAN_2026-11-17.md)；安装步骤见 [README](../README.md#安装)。
+当前基线：**0.1.0**，DSH 0.2.2-rc.5；单测 148 项、`test:e2e` 38 步、`test:registry` 7 步、`test:ui` 23 步、`test:simulated` 16 步、`test:layout` 4 图、打包清单 27 个文件。本文是后续工作清单，不代表这些问题均已复现为故障。源码现状和验证记录见 [开发进度](DEVELOPMENT_PROGRESS.md)；认证能力与分阶段计划见 [开发计划](DEVELOPMENT_PLAN_2026-11-17.md)；安装步骤见 [README](../README.md#安装)。
 
 ## P0：优先完成真实接入验收与边界处理
 
 ### 1. 在真实 DSH 桌面 profile 安装验收
 
-当前状态：**部分完成**（2026-11-17 第一轮，详见 [开发进度](DEVELOPMENT_PROGRESS.md#第一轮桌面验收2026-11-17)）。已按 README 方式 A link 安装到 `desktop`，插件行挂载、客户端设置页注册、列表、测试连接、添加 + 后台验证、工具读取、停用、启用、删除均通过；重启的 revision 缺陷已修。
+当前状态：**完成**（2026-11-19 第二轮）。第一轮（2026-11-17）已按 README 方式 A link 安装到 `desktop`，插件行挂载、设置页注册、列表、测试连接、添加 + 后台验证、工具读取、停用、启用、删除均通过；第二轮维护者人工复核了主题 / 窄窗 / 凭证文案 / 官方 Manager 边界 / 删除清理，自动化补上了重启恢复与连接错误结算。第 4 组「凭证服务未挂载」属开发辅助场景，未要求桌面自助验证。
 
 - [x] 按 [README 安装](../README.md#安装) 完成 link 安装（插件页 → 添加插件）。
 - [x] 确认设置页与 Host 路由（`/api/dsh-mcp-hub/*`；桌面页面 origin 是 `dsh-app://app`，没有可复用的 HTTP 地址）加载。
-- [x] 样式与窄窗口布局（2026-11-18）：`npm run test:layout` 在真实插件页面上截图浅色 / 深色 / 700px 窄窗口 / 窄窗口编辑窗口，并断言无横向溢出、弹窗不超出视口。**桌面应用注入的 `--dsw-alias-*` 主题变量**仍需人工看一眼（Web 构建不注入）。
+- [x] 样式与窄窗口布局（2026-11-18 自动化 + 2026-11-19 人工确认）：`npm run test:layout` 在真实插件页面上截图浅色 / 深色 / 700px 窄窗口 / 窄窗口编辑窗口，并断言无横向溢出、弹窗不超出视口；桌面注入的 `--dsw-alias-*` 主题变量与窄窗口观感已由维护者在桌面实例确认。
 - [x] 重启 DSH 后恢复（2026-11-19 自动化）：`test:e2e` 阶段 3 停掉真实 Host、用同一个临时 profile 重启，断言已连接条目重新 `connected` 且工具重新注册、失败条目的 `failed` 结论与原因文本不变、手动导入的 `file-` 来源和候选仍在。桌面实例的视觉与主题仍按下文人工清单看一眼。
 - [x] Streamable HTTP 的测试、保存、验证、工具与删除（由 `test:e2e` 阶段 2 覆盖；桌面实例未单独实测）。
 - [x] 凭证引用：存在、模板保留、轮换后重连（由 `test:e2e` 覆盖）。
 - [x] 密钥统一写入 DSH 凭证服务：明文、`${env:X}` 引用、参数与 URL 明文都会转成 `MCPHUB_<服务>_<字段>` 引用；重名自动加后缀、只有独占名字允许轮换；导出按选择解析引用；`reveal` 可读回（单测 + 页面层覆盖）。
-- [x] 凭证剩余分支的自动化（2026-11-19）：缺失变量/凭证时的提示已有单测；没有挂载 `credentials` 服务时，保存明文密钥与 `reveal` 都返回 `CREDENTIAL_UNAVAILABLE` 且不写配置；插件行/继承行/清理行的 `editable`、`removable`、`source` 与拒绝写入口径由单测锁定。桌面实例上的查看/复制/编辑密钥仍留人工确认。
-- [ ] 验证官方 Manager 中已有服务、插件注册服务及继承配置的可操作边界。
+- [x] 凭证剩余分支的自动化（2026-11-19）：缺失变量/凭证时的提示已有单测；没有挂载 `credentials` 服务时，保存明文密钥与 `reveal` 都返回 `CREDENTIAL_UNAVAILABLE` 且不写配置；插件行/继承行/清理行的 `editable`、`removable`、`source` 与拒绝写入口径由单测锁定。桌面实例上的密钥查看 / 复制 / 编辑与缺失凭证文案已由维护者确认。
+- [x] 验证官方 Manager 中已有服务、插件注册服务及继承配置的可操作边界（2026-11-19 维护者人工确认：只读展示、不可编辑 / 不可删除，继承行与插件注册行都符合预期）。
 
 人工项已整理成可勾选清单：[桌面实例验收](DESKTOP_ACCEPTANCE.md)（含记录模板与失败时要附的证据）。
 
@@ -46,7 +46,7 @@
 - [x] 首次连接给两倍等待预算（尚无成功记录时），并在连接超过 15 秒时提示可能在下载依赖。
 - [ ] 真实首次 npx 下载（需要外网与一个较重的包）仍只由预算兜底，未在自动化里实际下载。
 - [ ] 清理失败无法在测试里稳定制造（客户端会升级到 SIGKILL 兜底）；目前只保证诊断里展示 `cleanupError`，需要真实案例再验证。
-- [ ] 永久性连接错误的结算口径（2026-11-19 发现）：`http://127.0.0.1:1/mcp` 这类非法端口会走「可重试」路径，验证停在 `reconnecting` 直到重试上限，而不是像 401 一样立即判失败。需要判断哪些 `fetch failed` 原因（bad port、DNS 不存在、协议不匹配）应快速结算，避免用户把端口写错后长时间看到「重试中」。
+- [x] 永久性连接错误的结算口径（2026-11-19 修复）：bad port、非法 URL、DNS 不存在（`ENOTFOUND` / `EAI_NONAME`）在 `reconnecting` 阶段直接结算为 `failed`，detail 为「连接地址不可用：…」，不再耗到重试上限；协议不匹配仍交给常规重试。由 `tests/service.test.mjs` 两种原因与 `test:e2e` 的 `dead-endpoint` 步（要求 8 秒内结算）锁定。
 
 验收标准：超时设置有一致含义；验证失败有明确阶段和诊断；不报告旧实例连接成功，不遗留未经确认的测试进程。
 
@@ -80,10 +80,10 @@
 
 ### 6. 接入 CI
 
-`.github/workflows/ci.yml` 已接入；本地基线先跑通（单测 147 项、`check`、`build`、四条端到端、打包清单 27 个文件全部通过）。`checks` 同时在 `windows-latest` 与 `ubuntu-latest` 上跑，Windows 先设为 `continue-on-error`（报告模式），等真机全绿后再改成阻塞。
+`.github/workflows/ci.yml` 已接入；本地基线先跑通（单测 148 项、`check`、`build`、五条端到端脚本、打包清单 27 个文件全部通过）。`checks` 同时在 `windows-latest` 与 `ubuntu-latest` 上跑，Windows 先设为 `continue-on-error`（报告模式）。2026-11-19 已修掉 Windows 上必然失败的 XDG 路径断言（`tests/sources.test.mjs` 改用 `[\\/]`），待下一次推送确认真机全绿后再改成阻塞。
 
 - [x] 基础流水线：`npm ci` → `npm test` → `npm run check` → `npm run build` → `npm pack --dry-run --json --ignore-scripts` 交给 `scripts/assert-pack.mjs` 断言包内容（`lib/client.js`、`lib/style.css`、`cordis.patch.yml`、`locale/`、`icon.svg`、`src/host`、`src/shared`、`README.md`、`LICENSE`），并断言复审报告不进包。这一层不需要 DSH，公开 runner 即可。
-- [x] 端到端流水线（需要装了 DSH 的机器）：`npm run test:e2e` 与 `npm run test:ui` 串行跑在一个带 `dsh` 标签的自托管 runner 上，由仓库变量 `DSH_E2E_RUNNER=true` 打开（未打开时整个 job 跳过，不会挂起）。CI 里设 `DSH_E2E_REQUIRED=1`，把「找不到 dsh / Chrome」从 SKIP 变成失败——否则 runner 没装 DSH 时会绿灯通过但什么都没测。
+- [x] 端到端流水线（需要装了 DSH 的机器）：`npm run test:e2e`、`npm run test:registry` 与 `npm run test:ui` 串行跑在一个带 `dsh` 标签的自托管 runner 上，由仓库变量 `DSH_E2E_RUNNER=true` 打开（未打开时整个 job 跳过，不会挂起）。CI 里设 `DSH_E2E_REQUIRED=1`，把「找不到 dsh / Chrome」从 SKIP 变成失败——否则 runner 没装 DSH 时会绿灯通过但什么都没测。
 - [x] 判定与产物：脚本的 JSON 报告完整打在作业日志里；`test:ui` 失败时自动把全页截图写到 `tests/e2e/artifacts/ui-failure-*.png`，报告里带 `screenshot` 路径；CI 以 `ui-failure` artifact 上传。
 - [x] 缓存：基础作业用 `setup-node` 的 npm 缓存；自托管 runner 不缓存 `node_modules`，每次 `npm ci` 保证干净。`puppeteer-core` 不下载浏览器，Chrome 由 runner 提供（`DSH_E2E_CHROME_PATH`）。
 
@@ -105,7 +105,7 @@
 | 运行环境帮助 | 命令绝对路径、PATH、目录、变量引用与凭证引用的差异可直接理解 |
 | 来源缓存与状态刷新（状态部分已完成：长轮询推送；来源缓存仍待定） | 明确手动文件候选保留范围；窗口重开、外部修改及并发刷新不显示旧状态 |
 | 可访问性与布局（布局已自动截图，键盘焦点仍待人工） | 键盘焦点、模态背景交互、长参数、窄窗口、深浅色主题、中文溢出；`npm run test:layout` 已覆盖溢出的断言 |
-| 跨平台验证（部分完成 2026-11-19） | Windows 的 `npx`/`uvx` 已按 PATHEXT 解析为 `.cmd`/`.exe`，PATH/PATHEXT 大小写不敏感；`checks` 已加 Windows runner（报告模式）。仍待：真机跑绿后改为阻塞、目录与安装行为、Linux 覆盖 |
+| 跨平台验证（部分完成 2026-11-19） | Windows 的 `npx`/`uvx` 已按 PATHEXT 解析为 `.cmd`/`.exe`，PATH/PATHEXT 大小写不敏感；XDG 路径断言已改为跨平台；`checks` 已加 Windows runner（报告模式）。仍待：真机跑绿后改为阻塞、目录与安装行为、Linux 覆盖 |
 | 多语言（已完成） | 中文 / 英文跟随 DSH 语言设置；业务组件仍以中文为源文案，由 `src/client/i18n.js` 在渲染边界翻译 |
 
 ## P2：后续产品能力
@@ -115,7 +115,7 @@
 - [x] 确定目录来源及数据协议：只接官方 MCP Registry，Host 代理 `/v0/servers` 搜索和详情。
 - [x] 展示发布者、来源、命令 / 地址、运行环境、配置字段和认证要求；npm、PyPI、OCI、streamable-http 可转换，SSE 和其他包类型明确不支持。
 - [x] 选择后预填现有编辑页，复用配置编辑、逐行测试、一次 revision 写入和后台验证，不直接绕过检查执行安装。
-- [ ] 补真实 Registry 的离线、接口失败、分页、重复安装和未知字段端到端验收。
+- [x] 补 Registry 的离线、接口失败、分页、未知字段端到端验收（2026-11-19，本地假 Registry）：`test:registry` 覆盖两页搜索与下架过滤、详情转换与密钥提示、HTTP 500 / 坏 JSON / 超时 / 连接不上四种失败；真实官方目录的连通性与数据漂移仍需人工看一次（CI 不依赖外网）。
 - [ ] 评估是否需要私有/企业目录；当前只读公开官方目录。
 
 ### 完整 OAuth 与凭据管理（决策已完成，见 [开发计划](DEVELOPMENT_PLAN_2026-11-17.md#认证能力)）
@@ -150,11 +150,11 @@
 
 ## 下一次开发的建议顺序
 
-截至 2026-11-19（r9）：安装、Host 侧验收、`test:e2e`（37 步，新增宿主重启恢复与阶段 4/5）、`test:ui`（23 步）、`test:simulated`（模拟九种客户端 + 各种密钥写法）、`test:layout`（浅色/深色/窄窗口）、CI（含 Windows 报告模式）、启停后重新验证、密钥统一写入 DSH 凭证服务、行内查看/复制/编辑密钥、删除后清理期同名重加、来源兼容矩阵、Windows 命令探测、无凭证服务与官方 Manager 行边界、删除后重新导入 / 外部配置变更 / 并发保存 / 验证中关闭 / 卸载后 404 都已完成；`test:tarball`、`test:remote`、`test:real-sources` 三个可选验收也已跑通；本地基线全绿（单测 147 项、`check`、`build`、四条端到端脚本、打包清单 27 个文件）。
+截至 2026-11-19（r10）：安装、Host 侧验收、`test:e2e`（38 步，含宿主重启恢复、阶段 4/5 与非法端点快速失败）、`test:registry`（7 步，本地假 Registry）、`test:ui`（23 步）、`test:simulated`（九种客户端 + 各种密钥写法）、`test:layout`（浅色/深色/窄窗口）、CI（含 Windows 报告模式）、启停后重新验证、密钥统一写入 DSH 凭证服务、行内查看/复制/编辑密钥、删除后清理期同名重加、来源兼容矩阵、Windows 命令探测、无凭证服务与官方 Manager 行边界、删除后重新导入 / 外部配置变更 / 并发保存 / 验证中关闭 / 卸载后 404、桌面人工项都已完成；`test:tarball`、`test:remote`、`test:real-sources` 三个可选验收也已跑通；本地基线全绿（单测 148 项、`check`、`build`、五条端到端脚本、打包清单 27 个文件）。
 
-1. 复现基线：`npm ci && npm test && npm run check && npm run build`，再**串行**跑 `npm run test:e2e` 与 `npm run test:ui`（各约 1–2 分钟；两者都默认占 `127.0.0.1:3080`，并行会 EADDRINUSE）。推送后确认 CI 的 checks 作业（Ubuntu 为阻塞项，Windows 目前只报告）通过；要跑端到端按 README「持续集成」挂 runner。
-2. **补 P0-1 剩余的人工项**（桌面注入的 `--dsw-alias-*` 主题与窄窗口、凭证缺失 / 凭证服务不可用时的界面观感、官方 Manager 已有服务边界），这些只能在桌面实例上验；重启恢复、凭证拒绝与 Manager 行边界已在自动化里锁定，人工只需复核界面。
-3. 补齐 P0-2 的真实来源样本与 P0-3 的两处真实边界（首次 npx 下载、清理失败案例）。
+1. 复现基线：`npm ci && npm test && npm run check && npm run build`，再**串行**跑 `npm run test:e2e`、`npm run test:registry` 与 `npm run test:ui`（e2e / ui 各约 1–2 分钟且都默认占 `127.0.0.1:3080`，并行会 EADDRINUSE）。推送后确认 CI 的 checks 作业（Ubuntu 为阻塞项，Windows 目前只报告）；Windows 变绿后把 `continue-on-error` 去掉。要跑端到端按 README「持续集成」挂 runner。
+2. 补齐 P0-2 的真实来源样本（Windsurf / Cursor / Copilot 装好后跑 `test:real-sources`）与 P0-3 的两处真实边界（首次 npx 下载、清理失败案例）。
+3. 桌面实例再确认一次 Windows / Linux 上的安装与目录行为（目前只有 macOS 与 Windows 单元测试报告）。
 4. 再进入认证：OAuth 授权与 401 重授权（Token 助手/凭证写入已完成，认证状态模型仍需在 OAuth 前补齐）。
 
 ## 提交与发布约定

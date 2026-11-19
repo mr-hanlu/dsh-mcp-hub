@@ -93,8 +93,13 @@ jobs:
           DSH_E2E_REQUIRED: '1'
         run: npm run test:e2e
 
+      - name: Registry 边界验收（本地假 Registry）
+        env:
+          DSH_E2E_REQUIRED: '1'
+        run: npm run test:registry
+
       - name: 页面层端到端
-        # 两条端到端都默认占用 127.0.0.1:3080，必须串行跑。
+        # 这些端到端都默认占用 127.0.0.1:3080，必须串行跑。
         env:
           DSH_E2E_REQUIRED: '1'
           CHROME_PATH: ${{ vars.DSH_E2E_CHROME_PATH }}

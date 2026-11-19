@@ -2,15 +2,31 @@
 
 更新日期：2026-11-19（Asia/Shanghai）
 
-> 收工状态：单测 147 项、`check`、`build`、`test:e2e`（stdio + 启动/重连边界 + HTTP + 凭证 + 删除后同名重加 + 宿主重启恢复 + 删除后重新导入 / 外部配置变更 / 并发保存 / 验证中关闭 / 卸载，37 步）、`test:simulated`（假 HOME + 九种客户端写法 + 各种密钥）、`test:ui`（页面主流程，23 步）、`test:layout`（浅色/深色/窄窗口）、`test:tarball`、`test:remote`（DeepWiki）、`test:real-sources`（本机真实 Codex / Claude Code 文件）全部通过；桌面实例已 link 安装并完成第一轮验收。CI 基础流水线与端到端作业已接入，`checks` 另加 Windows runner（报告模式）；启停后的验证结论已能刷新；密钥已统一写入 DSH 凭证服务，配置只保留引用；删除后清理期的同名重加不再误报重名；页面剩余分支（表单补全变量、重命名引用行、失败后重测）已补齐；来源兼容矩阵用真实 Claude Code / Codex 样本建立；模拟来源功能验收覆盖了本机没装的客户端；桌面人工项整理成清单。下一步是清单里的桌面验收与其余来源的真实文件，见 [后续任务](NEXT_TASKS.md#下一次开发的建议顺序)。
+> 收工状态：单测 148 项、`check`、`build`、`test:e2e`（stdio + 启动/重连边界 + HTTP + 凭证 + 删除后同名重加 + 宿主重启恢复 + 删除后重新导入 / 外部配置变更 / 并发保存 / 验证中关闭 / 卸载 + 非法端点快速失败，38 步）、`test:registry`（本地假 Registry 的分页 / 详情 / 失败边界，7 步）、`test:simulated`（假 HOME + 九种客户端写法 + 各种密钥）、`test:ui`（页面主流程，23 步）、`test:layout`（浅色/深色/窄窗口）、`test:tarball`、`test:remote`（DeepWiki）、`test:real-sources`（本机真实 Codex / Claude Code 文件）全部通过；桌面实例已 link 安装并完成两轮验收，人工项已确认。CI 基础流水线与端到端作业已接入，`checks` 另加 Windows runner（报告模式）；启停后的验证结论已能刷新；密钥已统一写入 DSH 凭证服务，配置只保留引用；删除后清理期的同名重加不再误报重名；页面剩余分支（表单补全变量、重命名引用行、失败后重测）已补齐；来源兼容矩阵用真实 Claude Code / Codex 样本建立；模拟来源功能验收覆盖了本机没装的客户端；桌面人工项整理成清单。下一步是清单里的桌面验收与其余来源的真实文件，见 [后续任务](NEXT_TASKS.md#下一次开发的建议顺序)。
 
 ## 当前版本与状态
 
 - 首个正式版本号统一为 **0.1.0**；开发期间的本地临时版本号不计入正式发布历史。
 - 当前交付为 DSH 插件源码、可构建的浏览器模块、本地预览、测试及安装打包流程。
-- 尚未发布到 npm、插件市场或创建正式发布标签；本次只进行本地 Git 提交，push 由仓库维护者执行。
+- 已创建 `v0.1.0` Release 并向插件市场提交收录 PR（awesome-dsh-plugin #16848，等待维护者合并）；尚未发布到 npm（同名包被占位）。Git 提交由本地完成，push 由仓库维护者执行。
 - 功能重点为「已添加」「本地导入」和「在线搜索」；在线搜索只接官方 MCP Registry，选择后预填编辑页，不静默安装。
-- 桌面 `desktop` profile 已用 link 方式安装：`~/.dsh/profiles/desktop/package.json` 里 `dsh-mcp-hub` 指向本仓库，bundles 也含它；第一轮验收见下文。重启恢复、凭证缺失拒绝与官方 Manager 行边界已转成自动化；仍待人工的是桌面注入的主题变量、窄窗口观感与凭证缺失时的界面文案。
+- 桌面 `desktop` profile 已用 link 方式安装：`~/.dsh/profiles/desktop/package.json` 里 `dsh-mcp-hub` 指向本仓库，bundles 也含它；两轮验收见下文。重启恢复、凭证缺失拒绝与官方 Manager 行边界已转成自动化；桌面注入的主题变量、窄窗口观感与凭证缺失时的界面文案已由维护者人工确认。
+
+## 本轮（2026-11-19 第四段）：P0 收尾
+
+这一轮处理 P0 清单：Windows 单元测试、永久性连接错误、Registry 边界与文档状态。
+
+| 位置 | 处理 |
+| --- | --- |
+| `tests/sources.test.mjs` | XDG 路径断言从 `/` 改为 `[\\/]`。原断言在 Windows 反斜杠路径上必然失败，是 Windows job 红灯的首要嫌疑；其余路径断言逐条核对后无平台假设。 |
+| `src/host/service.js` | 新增 `DEAD_ENDPOINT`（`bad port`、非法 URL、`ENOTFOUND` / `EAI_NONAME`）。这类失败重试不会变好，验证在 `reconnecting` 阶段直接结算为 `failed`，detail「连接地址不可用：…」；协议不匹配仍走常规重试。 |
+| `tests/service.test.mjs` | 新增非法端点用例：`bad port` 与 `getaddrinfo ENOTFOUND missing.invalid` 都要求立即失败而不是耗完重试预算。总单测 147 → **148**。 |
+| `tests/e2e/web-profile.e2e.mjs` | 新增 `dead-endpoint` 步：保存 `http://127.0.0.1:1/mcp`，断言 8 秒内结算为 `failed` 且 detail 可读；随后清理。`test:e2e` 37 → **38 步**。 |
+| `tests/e2e/registry.e2e.mjs`（新增） | 本地 `createServer` 假 Registry，通过临时 profile 的 `cordis.patch.yml` 覆盖 `catalogBaseUrl` / `catalogTimeoutMs` / `catalogCacheMs`。覆盖两页搜索、下架过滤、未知字段、详情转换与密钥提示、HTTP 500、坏 JSON、超时、连接不上，共 7 步。 |
+| `package.json` / `.github/workflows/ci.yml` | 新增 `test:registry`；端到端作业在 `test:e2e` 之后串行跑它（同样 `DSH_E2E_REQUIRED=1`）。 |
+| `docs/NEXT_TASKS.md` / `docs/DESKTOP_ACCEPTANCE.md` | r10：P0-1 标完成（维护者已人工复核 1–3、5–6 组），P0-3 的连接错误口径关闭，P2 的 Registry 边界关闭；基线改为 148 项 / 38 步 / 7 步。 |
+
+验证：`npm test` 148 项、`npm run check`、`npm run build`、`npm run test:e2e`（38 步）、`npm run test:registry`（7 步）全部通过；Windows job 需下一次推送后确认真机全绿，确认前仍保持报告模式。
 
 ## 本轮（2026-11-19 第三段）：文档分层与测试说明
 
@@ -21,7 +37,7 @@
 | `README.md` | 重写为对外首页：定位、功能列表、三种安装方式、装好后确认、兼容性与边界、文档索引；详细规则不再堆在首页（238 → 133 行）。 |
 | `docs/USAGE.md`（新增） | 承接原 README 的导入与验证、来源路径表、密钥与凭证、在线搜索、编辑规则、配置项、已知边界。 |
 | `docs/README.md`（新增） | 文档索引：用户文档 / 开发文档 / 历史记录，标注哪些持续更新、哪些是快照，附维护约定。 |
-| `tests/README.md`（新增） | 测试分层表、9 个单测文件各自的覆盖点、集成与 7 个 e2e 脚本的阶段说明、环境变量、建议顺序、常见问题与写测试约定。 |
+| `tests/README.md`（新增） | 测试分层表、9 个单测文件各自的覆盖点、集成与 8 个 e2e 脚本的阶段说明、环境变量、建议顺序、常见问题与写测试约定。 |
 | `src/client/i18n.js` | 删除撤销入口移除后不再使用的词条与正则（`关闭撤销提示`、`撤销`、`没有可撤销的服务`、`已撤销 N 个…`、`已添加 N 个服务` 正则）；`i18n.test.mjs` 改用仍在使用的动态消息做断言。 |
 | `package.json` | 补 `repository` / `homepage` / `bugs`，description 改为面向用户的一句话。 |
 | 计数 | 打包清单在加入英文 README（`README.en.md`）后为 **27 个文件**；单测仍 147 项。 |
@@ -351,17 +367,18 @@ CI：`.github/workflows/ci.yml` 分两个作业。`checks` 在 `ubuntu-latest` �
 
 | 验证方式 | 结果与覆盖范围 |
 | --- | --- |
-| `npm test` | 147 项通过：格式解析、高德配置回归、env 缺失与凭据判定、脱敏、重复判断、版本冲突、旧连接误判、工具注册等待、真实非 MCP 程序拒绝、密钥写入凭证服务与名称生成/冲突/独占轮换、reveal 与导出解析、硬约束与错误 code、项目级导入、坏条目容错、验证结果持久化、启停后重新验证、推送通道、复诊、备份占位符、删除后清理期的同名重加与重试（`NAME_CLEANING`）、首次连接的「可能在下载依赖」提示、缺失变量名不带 `env:` 前缀、Windows 命令 PATHEXT 探测、无凭证服务时的拒绝与 Manager 行边界、验证中断态结算、来源兼容矩阵（真实 Claude Code / Codex 样本、空服务列表、`env_vars` 转发、相对命令与空 PATH）、跨来源重复识别等 |
+| `npm test` | 148 项通过：格式解析、高德配置回归、env 缺失与凭据判定、脱敏、重复判断、版本冲突、旧连接误判、工具注册等待、真实非 MCP 程序拒绝、密钥写入凭证服务与名称生成/冲突/独占轮换、reveal 与导出解析、硬约束与错误 code、项目级导入、坏条目容错、验证结果持久化、启停后重新验证、推送通道、复诊、备份占位符、删除后清理期的同名重加与重试（`NAME_CLEANING`）、首次连接的「可能在下载依赖」提示、缺失变量名不带 `env:` 前缀、Windows 命令 PATHEXT 探测、无凭证服务时的拒绝与 Manager 行边界、验证中断态结算、非法端点快速失败、来源兼容矩阵（真实 Claude Code / Codex 样本、空服务列表、`env_vars` 转发、相对命令与空 PATH）、跨来源重复识别等 |
 | `npm run check` | Host JavaScript 语法检查通过 |
 | `npm run build` | 插件浏览器模块及独立预览构建通过 |
-| `npm run test:e2e` | 通过：临时 `DSH_HOME` + `web` 模板 profile，真实 `/api/dsh-mcp-hub/*` 路由跑完 stdio 全链路（列表、扫描、测试、添加、验证、工具、启停、重启、删除）、启动/重连边界（2.5 秒慢握手、2 秒慢工具发现、握手后退出进入重连退避）与 Streamable HTTP 全链路（静态 Bearer、凭证模板、凭证轮换重连、错误 token 判为需要认证）；删除后等官方清理行消失、删除后立刻同名重加（运行中的同名仍判 `NAME_TAKEN`）；不写用户 profile |
+| `npm run test:e2e` | 通过：临时 `DSH_HOME` + `web` 模板 profile，真实 `/api/dsh-mcp-hub/*` 路由跑完 stdio 全链路（列表、扫描、测试、添加、验证、工具、启停、重启、删除）、启动/重连边界（2.5 秒慢握手、2 秒慢工具发现、握手后退出进入重连退避）与 Streamable HTTP 全链路（静态 Bearer、凭证模板、凭证轮换重连、错误 token 判为需要认证、非法端口在 8 秒内判为连接地址不可用）；阶段 3 宿主重启恢复，阶段 4 删除后重新导入 / 外部配置热加载 / 并发三写，阶段 5 验证中停 Host 与卸载后 404；删除后等官方清理行消失、删除后立刻同名重加（运行中的同名仍判 `NAME_TAKEN`）；不写用户 profile |
 | `npm run test:ui` | 通过（23 步）：无头 Chrome 在临时 profile 上点完设置页 —— 导航到 MCP Hub、空状态、导入页签、JSON 粘贴逐行测试、一次添加两个并显示已连接、重名跳过、测试进度与取消、连接失败原因、缺失环境变量、编辑已有服务、保存后关闭、删除弹窗与删后空状态、页签切换草稿保留、表单里缺引用时「直接填写」补全并重测通过、重命名凭证引用行保持引用、测试失败后改配置重测通过、假 HOME 的来源分组与从候选导入带密钥的服务；失败留截图 |
 | `npm run test:simulated` | 通过：假 HOME 里九个客户端的配置（明文 / `${env:X}` / `${X}` / `{env:X}` / Bearer 环境变量 / env 请求头 / env_vars / 停用项 / 未知字段 / 缺变量 / 相对命令）走真实 Host 扫描并逐个导入：密钥写入 DSH 凭证、配置只留引用、真连接注册工具、跨来源重复识别、导出与来源文件不被改写 |
+| `npm run test:registry` | 通过（7 步）：本地假 Registry 覆盖分页与 `nextCursor`、下架过滤、未知字段、详情转换与密钥提示、HTTP 500、坏 JSON、超时、连接不上；不依赖外网 |
 | `npm run test:layout` | 通过：真实插件页面在临时 profile 里截浅色 / 深色 / 700px 窄窗口 / 窄窗口编辑窗口，断言无横向溢出、编辑窗口不超出视口、深浅色底色不同（覆盖插件回退配色；DSH 主题变量仍需桌面人工看） |
-| `node scripts/assert-pack.mjs` | 通过：`npm pack --dry-run --json --ignore-scripts` 的清单含 24 个文件，Host / 共享模块 / 浏览器模块 / 样式 / patch / locale / icon / 文档 / LICENSE 齐全，复审报告未进包 |
+| `node scripts/assert-pack.mjs` | 通过：`npm pack --dry-run --json --ignore-scripts` 的清单含 27 个文件，Host / 共享模块 / 浏览器模块 / 样式 / patch / locale / icon / 文档 / LICENSE 齐全，复审报告未进包 |
 | CI | 已接入 `.github/workflows/ci.yml`：基础作业公开 runner 可跑；端到端作业需自托管 runner（`DSH_E2E_RUNNER=true` + `dsh` 标签），CI 内 `DSH_E2E_REQUIRED=1` 禁止 SKIP |
 | `npm run test:integration` | 1 项真实集成测试通过：官方 DSH 0.2.2 系（当次 rc.3；现在按实际版本校验）临时 profile 中，测试不持久化、保存持久化、连接、工具注册、显式读取、重复判断、停用、停用编辑和删除 |
-| 桌面实机验收 | 见「第一轮桌面验收」：安装、挂载、列表、测试、添加与验证、工具、启停、删除均通过；重启缺陷已修 |
+| 桌面实机验收 | 两轮均通过：安装、挂载、列表、测试、添加与验证、工具、启停、删除；重启缺陷已修；2026-11-19 维护者确认主题 / 窄窗、凭证文案、官方 Manager 边界与删除清理 |
 | 浏览器验收 | 预览中验证 JSON 自动识别、env 引用显示与缺失提示、删除弹窗、删除后重新导入、保存关闭、Toast 消失和深浅色布局 |
 | 预览 HTTP 接口 | 真实调用接口，确认可执行文件存在但不实现 MCP 时返回失败 |
 | 安装包 | 已检查浏览器模块能加载，Host 与共享模块进入 tarball，并断言清单从 24 个文件起不再缩水；构建产物和 tarball 不进入 Git |

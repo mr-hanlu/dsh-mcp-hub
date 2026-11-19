@@ -25,6 +25,9 @@ const STATUS_WITH_ERROR = ['failed', 'reconnecting', 'waiting-credentials'];
  * `lastError`；这里按文本归类，认不出时保留原文，绝不假装是别的原因。
  */
 const AUTH_FAILURE = /(?:^|\D)(?:401|403|unauthori[sz]ed|invalid[_ -]?token|authenticat)/i;
+// 这些错误重试多少次也不会变：端口被禁用/地址不合法、域名不存在。客户端却会把它当
+// 可重试错误一直重连到预算耗尽，验证界面只能显示「第 N 次重试」。
+const DEAD_ENDPOINT = /bad port|ERR_INVALID_URL|Invalid URL|ENOTFOUND|EAI_NONAME/i;
 const META_VERSION = 1;
 const MAX_PERSISTED_VERIFICATIONS = 100;
 
@@ -910,6 +913,12 @@ export class HubService {
       if (AUTH_FAILURE.test(reason)) {
         if (!this.stillExpected(name, record.expected)) return this.finishVerification(record, 'failed', '验证期间配置已被修改，请刷新后查看最新状态');
         return this.finishVerification(record, 'failed', '需要认证：' + reason);
+      }
+      // 地址本身不可用（禁用端口、非法 URL、域名不存在）没有重试价值；立即给结论，
+      // 不让用户干等完整的启动预算。
+      if (DEAD_ENDPOINT.test(reason)) {
+        if (!this.stillExpected(name, record.expected)) return this.finishVerification(record, 'failed', '验证期间配置已被修改，请刷新后查看最新状态');
+        return this.finishVerification(record, 'failed', '连接地址不可用：' + reason);
       }
     }
     if (status?.state === 'connected') {

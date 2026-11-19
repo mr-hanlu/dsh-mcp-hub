@@ -10,6 +10,7 @@
 | 语法 / 共享层检查 | `npm run check` | Node | 总是运行 |
 | 真实集成测试 | `npm run test:integration` | `DSH_TEST_MODULES` 指向官方包目录 | 缺环境时失败并提示准备命令 |
 | 接口端到端 | `npm run test:e2e` | 本机 `dsh` launcher | 找不到 `dsh` 时 SKIP |
+| Registry 边界 | `npm run test:registry` | `dsh` | 找不到时 SKIP |
 | 页面端到端 | `npm run test:ui` | `dsh` + Chrome + `puppeteer-core` | 找不到时 SKIP |
 | 布局截图 | `npm run test:layout` | 同页面端到端 | 找不到时 SKIP |
 | 模拟来源 | `npm run test:simulated` | `dsh` | 找不到时 SKIP |
@@ -21,7 +22,7 @@
 
 ## 单元测试
 
-`npm test` 直接跑 `tests/*.test.mjs`，用 Node 内置 `node:test` + `assert/strict`，不依赖测试框架。共 **147 项**。
+`npm test` 直接跑 `tests/*.test.mjs`，用 Node 内置 `node:test` + `assert/strict`，不依赖测试框架。共 **148 项**。
 
 | 文件 | 覆盖内容 |
 | --- | --- |
@@ -32,7 +33,7 @@
 | `i18n.test.mjs` | 中英词条、动态消息正则、占位符替换 |
 | `probe.test.mjs` | 缺变量时完全不启动进程；握手成功但清理未确认不算通过；可执行文件不是 MCP 时失败；`tools/list` 失败仍算“已连接、可添加” |
 | `servers.test.mjs` | 清理中的行不占用名称；`NAME_CLEANING` 自动重试；`takenNames` 边界 |
-| `service.test.mjs` | Host 服务主体（76 项）：后台验证与结算、首次连接双倍预算、失败自动停用、认证失败文案、取消验证、启停代次、批量导入一次 revision、重复名 / 冲突 / 零写入、撤销整批（接口能力）、密钥写入与 reveal、导出、清理行、官方 Manager 行边界、无凭证服务时的拒绝、验证中断态结算、来源记录持久化 |
+| `service.test.mjs` | Host 服务主体（78 项）：后台验证与结算、首次连接双倍预算、失败自动停用、认证失败文案、取消验证、启停代次、批量导入一次 revision、重复名 / 冲突 / 零写入、撤销整批（接口能力）、密钥写入与 reveal、导出、清理行、官方 Manager 行边界、无凭证服务时的拒绝、验证中断态结算、非法端点快速失败、来源记录持久化 |
 | `sources.test.mjs` | 各客户端真实形状：Claude 项目级、Codex `CODEX_HOME` / `env_vars` / Bearer、OpenCode 环境变量覆盖、Gemini `httpUrl`、VS Code `type` / `envFile`、跨来源去重（连接身份而非名字） |
 
 ## 真实集成测试
@@ -56,16 +57,20 @@ DSH_TEST_MODULES=/tmp/dsh-mcp-hub-smoke npm run test:integration
 
 ### 接口端到端：`npm run test:e2e`
 
-`tests/e2e/web-profile.e2e.mjs`，**37 步**，用真实 `/api/dsh-mcp-hub/*` 路由跑完：
+`tests/e2e/web-profile.e2e.mjs`，**38 步**，用真实 `/api/dsh-mcp-hub/*` 路由跑完：
 
 | 阶段 | 内容 |
 | --- | --- |
 | 1 | stdio 全链路：列表 → 扫描 → 测试连接 → 添加 → 后台验证 → 读工具 → 停用 → 启用 → 重启 → 删除 |
 | 1.5 | 启动 / 重连边界：慢握手、慢工具发现不能提前判失败；进程退出进入重连退避并暴露“第几次重试” |
-| 2 | Streamable HTTP：静态 Bearer、`${credential:…}` 模板、凭证轮换后自动重连、错误 token 判“需要认证”并立即结算 |
+| 2 | Streamable HTTP：静态 Bearer、`${credential:…}` 模板、凭证轮换后自动重连、错误 token 判“需要认证”并立即结算；非法端口在 8 秒内结算为“连接地址不可用” |
 | 3 | 宿主重启恢复：停 Host 再用同一 profile 重启，已连接条目、工具、失败原因、`file-` 来源都要回来 |
 | 4 | 删除后重新导入、外部 `cordis.patch.yml` 热加载与恢复、同一 revision 并发三写（恰一条成功、两条 `REVISION_CONFLICT`） |
 | 5 | 慢验证中停 Host 不得伪报成功；`plugin remove` 后重启，插件路由 404、组合配置无插件层 |
+
+### Registry 边界：`npm run test:registry`
+
+`tests/e2e/registry.e2e.mjs` 用一个本地假 Registry 覆盖目录接口的边界：两页搜索与 `nextCursor`、下架项过滤、未知字段不丢条目、详情转换（包安装参数、密钥变量提示、SSE 明确不支持）、HTTP 500、坏 JSON、超时、连接不上。通过临时 profile 的 `cordis.patch.yml` 覆盖 `catalogBaseUrl` / `catalogTimeoutMs` / `catalogCacheMs`，不访问真实公网，因此 CI 不会因 Registry 抖动而随机失败。
 
 ### 页面端到端：`npm run test:ui`
 
@@ -107,6 +112,7 @@ Chrome 默认取 macOS 路径，可用 `CHROME_PATH` 指定；`DSH_E2E_CHROME_PA
 ```sh
 npm test && npm run check && npm run build
 npm run test:e2e
+npm run test:registry
 npm run test:ui
 npm run test:simulated
 npm run test:layout
@@ -116,7 +122,7 @@ DSH_E2E_REMOTE=1 npm run test:remote
 DSH_E2E_REAL_SOURCES=1 npm run test:real-sources
 ```
 
-接口、页面、模拟、布局四类都默认占用 `127.0.0.1:3080`，**必须串行**跑，不要并行。
+接口、Registry、页面、模拟、布局五类都默认占用 `127.0.0.1:3080`，**必须串行**跑，不要并行。
 
 ## 常见问题
 

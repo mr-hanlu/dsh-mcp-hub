@@ -138,7 +138,8 @@ test('OpenCode 的 OPENCODE_CONFIG 与 XDG_CONFIG_HOME 覆盖默认路径', asyn
     assert.equal(byFile.files[0].path, custom, 'OPENCODE_CONFIG 没有排在最前');
     assert.ok(byFile.candidates.some(row => row.name === 'solo'));
     const byXdg = group(await scan({ XDG_CONFIG_HOME: dir }), 'opencode');
-    assert.match(byXdg.files[0].path, /opencode\/opencode\.(json|jsonc)$/, 'XDG_CONFIG_HOME 没有参与路径计算');
+    // Windows 的路径分隔符是反斜杠，不能只按 POSIX 匹配。
+    assert.match(byXdg.files[0].path, /opencode[\\/]opencode\.(json|jsonc)$/, 'XDG_CONFIG_HOME 没有参与路径计算');
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 

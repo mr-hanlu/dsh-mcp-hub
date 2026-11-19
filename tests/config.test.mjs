@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { extract, fingerprint, MASK, parseDocument, preflight, redact, resolveReferences, restoreMasked, scanSources, variableInfo } from '../src/host/config.js';
 
@@ -200,7 +200,7 @@ test('preflight never invents a working directory', async () => {
   assert.equal(Object.hasOwn(result.entry, 'cwd'), false);
   assert.equal(result.checks.find(check => check.label === '工作目录').ok, true);
   const declared = await preflight('demo', { transport: 'stdio', command: process.execPath, args: [], cwd: '~/work' }, { home: '/home/u', checkStat: async () => ({ isDirectory: () => true }) });
-  assert.equal(declared.entry.cwd, join('/home/u', 'work'));
+  assert.equal(declared.entry.cwd, resolve(join('/home/u', 'work')));
 });
 
 test('transport-specific fields are reported instead of silently dropped', () => {

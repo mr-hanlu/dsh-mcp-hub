@@ -293,6 +293,19 @@ async function main() {
     assert.ok(badVerified.ms < 15000, '认证失败应快速结算，实际 ' + badVerified.ms + ' ms');
     step('http-401', { state: 'failed', detail: badDetail, ms: badVerified.ms });
     await removeRow('hubbad');
+
+    // 永久性连接错误：禁用端口（bad port）没有重试价值，应在几秒内结算，而不是
+    // 一直显示「第 N 次重试」直到启动预算耗尽。
+    const deadPortEntry = { transport: 'streamable-http', url: 'http://127.0.0.1:1/mcp', headers: {} };
+    revision = (await servers()).revision;
+    assert.equal((await call('/mutate', { action: 'save', revision, name: 'hubbed', entry: deadPortEntry })).body.saved, true);
+    const deadPort = await waitState('hubbed', row => row?.verification && row.verification.state !== 'verifying', 'dead-endpoint', 20000);
+    assert.equal(deadPort.row.verification.state, 'failed', '不可达地址应记为失败：' + JSON.stringify(deadPort.row.verification));
+    const deadDetail = String(deadPort.row.verification.detail);
+    assert.match(deadDetail, /连接地址不可用|bad port/, '失败原因应说明地址不可用：' + deadDetail);
+    assert.ok(deadPort.ms < 8000, '不可达地址应快速结算，实际 ' + deadPort.ms + ' ms');
+    step('dead-endpoint', { state: 'failed', detail: deadDetail, ms: deadPort.ms });
+    await removeRow('hubbed');
     await removeRow('hubcred');
 
     // ---------- 阶段 3：宿主重启后恢复 ----------
@@ -304,8 +317,7 @@ async function main() {
     step('restart-connect', { state: beforeRestart.row.state });
 
     // 一个认证失败的条目：它的失败原因必须跨宿主重启保留下来。
-    // 不能用 127.0.0.1:1 这类 bad port——连接层错误会被判成可重试，验证迟迟不结算；
-    // 错误 token 走 401 快速失败（与阶段 2 的 hubbad 同一条路径）。
+    // 用 401 而不是 bad port，顺便覆盖认证原因的持久化路径。
     const deadEntry = { ...badEntry };
     revision = (await servers()).revision;
     assert.equal((await call('/mutate', { action: 'save', revision, name: 'hubdead', entry: deadEntry })).body.saved, true);

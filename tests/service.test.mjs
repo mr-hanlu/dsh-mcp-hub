@@ -72,6 +72,19 @@ test('an auth failure is reported as needing authentication instead of a timeout
   assert.match(record.detail,/^需要认证/);
   assert.match(record.detail,/401/);
 });
+test('an unreachable endpoint is settled instead of retrying until the budget runs out',async()=>{
+  // 禁用端口/不存在的域名会被客户端当成可重试错误，重连到预算耗尽；应立刻给出结论。
+  const {service}=fixture({waitMs:1000,status:{state:'reconnecting',attempt:1,maxAttempts:10,nextRetryAtMs:Date.now()+1000,lastError:'TypeError: fetch failed, cause: bad port'}});
+  const result=await service.mutate(body);assert.equal(result.verifying,true);
+  const record=service.verifications.get('demo');
+  assert.equal(record.state,'failed');
+  assert.match(record.detail,/连接地址不可用/);
+  assert.match(record.detail,/bad port/);
+  const dead=fixture({waitMs:1000,status:{state:'reconnecting',attempt:1,maxAttempts:10,lastError:'getaddrinfo ENOTFOUND missing.invalid'}});
+  await dead.service.mutate(body);
+  assert.equal(dead.service.verifications.get('demo').state,'failed');
+  assert.match(dead.service.verifications.get('demo').detail,/ENOTFOUND/);
+});
 test('connected without promised registered tools never counts as verified',async()=>{
   const {service}=fixture({schemas:[]});const result=await service.mutate(body);
   assert.equal(result.verifying,true);
