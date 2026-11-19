@@ -510,6 +510,22 @@ test('the last verification is persisted for the next Host run', async () => {
   } finally { await rm(home,{recursive:true,force:true}); }
 });
 
+test('a verification interrupted by a Host shutdown is settled instead of staying verifying', async () => {
+  const {mkdtemp,rm,mkdir,writeFile,readFile}=await import('node:fs/promises');const {tmpdir}=await import('node:os');const {join,dirname}=await import('node:path');
+  const home=await mkdtemp(join(tmpdir(),'mcp-hub-interrupted-'));
+  try {
+    const metaPath=join(home,'.dsh','mcp-hub','test','sources.json');
+    await mkdir(dirname(metaPath),{recursive:true});
+    await writeFile(metaPath,JSON.stringify({version:1,origins:{},verifications:{demo:{state:'verifying',startedAt:1}},sources:[]}));
+    const {service}=fixture({metaPath,servers:{demo:{...body.entry,enabled:true}}});
+    const restored=await service.init();
+    const row=(await restored.list()).servers.find(entry=>entry.name==='demo');
+    assert.equal(row.verification?.state,'failed');
+    assert.match(row.verification.detail,/中断/);
+    assert.equal(JSON.parse(await readFile(metaPath,'utf8')).verifications.demo.state,'failed');
+  } finally { await rm(home,{recursive:true,force:true}); }
+});
+
 test('manual imported sources survive a Host restart', async () => {
   const {mkdtemp,rm}=await import('node:fs/promises');const {tmpdir}=await import('node:os');const {join}=await import('node:path');
   const home=await mkdtemp(join(tmpdir(),'mcp-hub-sources-'));
@@ -683,4 +699,54 @@ test('secret args and url query parameters are credentialised',async()=>{
   assert.equal(form.value.servers.demo.args[0],'--api-key=${credential:MCPHUB_DEMO_API_KEY}');
   assert.match(form.value.servers.demo.url,/\?token=\$\{credential:MCPHUB_DEMO_TOKEN\}/);
   assert.equal(store.get('MCPHUB_DEMO_TOKEN'),TOKEN);
+});
+
+test('without a mounted credential service a plaintext secret fails instead of being written', async () => {
+  const {service,form}=fixture();
+  delete service.ctx.credentials;
+  await assert.rejects(
+    () => service.mutate({ ...body, entry: { ...body.entry, headers: { Authorization: 'Bearer plain-token' } } }),
+    error => error?.code === 'CREDENTIAL_UNAVAILABLE',
+  );
+  assert.equal(form.value.servers.demo, undefined, '没有凭证服务时不能把明文写进配置');
+});
+
+test('revealing a stored credential without a mounted service fails clearly', async () => {
+  const {service}=fixture({servers:{demo:{...body.entry,headers:{Authorization:'Bearer ${credential:MCPHUB_DEMO_TOKEN}'}}}});
+  delete service.ctx.credentials;
+  await assert.rejects(
+    () => service.reveal({ originalName: 'demo', field: 'headers', key: 'Authorization' }),
+    error => error?.code === 'CREDENTIAL_UNAVAILABLE',
+  );
+});
+
+test('plugin, inherited and cleanup rows keep their official-manager boundaries', async () => {
+  const base={inherited:{transport:'streamable-http',url:'https://example.com/inherited',enabled:true}};
+  const servers={
+    inherited:{...base.inherited},
+    own:{transport:'streamable-http',url:'https://example.com/own',enabled:true},
+  };
+  const {service}=fixture({
+    servers, base,
+    extraRows:[
+      {name:'plugin-row',status:{state:'connected'},configured:true},
+      {name:'gone-row',status:{state:'closed'},configured:false},
+    ],
+  });
+  const rows=Object.fromEntries((await service.list()).servers.map(row=>[row.name,row]));
+  assert.equal(rows['plugin-row'].managed,'plugin');
+  assert.equal(rows['plugin-row'].editable,false);
+  assert.equal(rows['plugin-row'].removable,false);
+  assert.equal(rows['plugin-row'].source.app,'插件注册');
+  assert.equal(rows.inherited.managed,'inherited');
+  assert.equal(rows.inherited.editable,true);
+  assert.equal(rows.inherited.removable,false);
+  assert.equal(rows.own.managed,'config');
+  assert.equal(rows.own.removable,true);
+  assert.equal(rows['gone-row'].managed,'cleanup');
+  assert.equal(rows['gone-row'].removable,false);
+  assert.equal(rows['gone-row'].source.app,'已删除，清理中');
+  await assert.rejects(() => service.mutate({ action:'remove', revision:1, name:'plugin-row' }), error => error?.code==='NOT_WRITABLE');
+  await assert.rejects(() => service.mutate({ action:'remove', revision:1, name:'inherited' }), error => error?.code==='INHERITED_ROW');
+  await assert.rejects(() => service.mutate({ action:'restart', revision:1, name:'plugin-row' }), error => error?.code==='NOT_WRITABLE');
 });

@@ -134,9 +134,11 @@ test('resolves ambient references consistently, defers official credentials, rej
 test('preflight uses the actual DSH environment without executing a command', async () => {
   const calls=[];
   const input={transport:'stdio',command:'node',args:['server.js'],env:{TOKEN:'${MISSING}'},cwd:'/work'};
-  const options={env:{PATH:'/runtime/bin'},checkAccess:async path=>calls.push(path),checkStat:async path=>({isDirectory:()=>path==='/work',isFile:()=>path==='/runtime/bin/node'})};
+  // 显式 linux：Windows 宿主要先把 node 扩展成 node.exe 再探测，期望值也会变。
+  const found=join('/runtime/bin','node');
+  const options={platform:'linux',env:{PATH:'/runtime/bin'},checkAccess:async path=>calls.push(path),checkStat:async path=>({isDirectory:()=>path==='/work',isFile:()=>path===found})};
   const result=await preflight('test',input,options);
-  assert.equal(result.ok,false);assert.ok(result.checks.some(row=>row.label==='变量引用'&&!row.ok));assert.equal(result.entry.command,'/runtime/bin/node');assert.deepEqual(calls,['/runtime/bin/node']);
+  assert.equal(result.ok,false);assert.ok(result.checks.some(row=>row.label==='变量引用'&&!row.ok));assert.equal(result.entry.command,found);assert.deepEqual(calls,[found]);
   assert.equal(input.command,'node');
 });
 test('preflight rejects unsupported SSE and absent executable', async () => {
@@ -145,12 +147,60 @@ test('preflight rejects unsupported SSE and absent executable', async () => {
   assert.equal(result.ok,false);
 });
 
+test('windows resolves npx through PATHEXT and the real environment', async () => {
+  // Windows 上 npx 是 npx.cmd；只按 join(PATH, 'npx') 探测会把合法配置判成找不到命令。
+  const calls=[];
+  const found=join('/tools','npx.cmd');
+  const result=await preflight('demo',{transport:'stdio',command:'npx',args:['-y','srv']},{
+    platform:'win32',env:{Path:'/tools',Pathext:'.cmd'},
+    checkAccess:async path=>{calls.push(path);if(path!==found)throw new Error('ENOENT')},
+    checkStat:async path=>({isDirectory:()=>false,isFile:()=>path===found}),
+  });
+  assert.equal(result.ok,true,JSON.stringify(result.checks));
+  assert.equal(result.entry.command,found);
+  assert.deepEqual(calls,[found]);
+});
+
+test('windows falls back to the default PATHEXT when the environment has none', async () => {
+  const calls=[];
+  const found=join('/tools','npx.EXE');
+  const result=await preflight('demo',{transport:'stdio',command:'npx',args:[]},{
+    platform:'win32',env:{PATH:'/tools'},
+    checkAccess:async path=>{calls.push(path);if(path!==found)throw new Error('ENOENT')},
+    checkStat:async path=>({isDirectory:()=>false,isFile:()=>path===found}),
+  });
+  assert.equal(result.entry.command,found);
+  assert.equal(calls.length,2,'默认扩展名顺序应先 .COM 再 .EXE');
+});
+
+test('a command that already has an extension is not probed twice', async () => {
+  const found=join('/tools','server.cmd');
+  const result=await preflight('demo',{transport:'stdio',command:'server.cmd',args:[]},{
+    platform:'win32',env:{PATH:'/tools',PATHEXT:'.CMD;.EXE'},
+    checkAccess:async path=>{if(path!==found)throw new Error('ENOENT')},
+    checkStat:async path=>({isDirectory:()=>false,isFile:()=>path===found}),
+  });
+  assert.equal(result.entry.command,found);
+});
+
+test('non-windows hosts keep exact command matching', async () => {
+  const found=join('/tools','npx');
+  const calls=[];
+  const result=await preflight('demo',{transport:'stdio',command:'npx',args:[]},{
+    platform:'linux',env:{PATH:'/tools'},
+    checkAccess:async path=>{calls.push(path);if(path!==found)throw new Error('ENOENT')},
+    checkStat:async path=>({isDirectory:()=>false,isFile:()=>path===found}),
+  });
+  assert.equal(result.entry.command,found);
+  assert.deepEqual(calls,[found]);
+});
+
 test('preflight never invents a working directory', async () => {
   const result = await preflight('demo', { transport: 'stdio', command: process.execPath, args: [] });
   assert.equal(Object.hasOwn(result.entry, 'cwd'), false);
   assert.equal(result.checks.find(check => check.label === '工作目录').ok, true);
   const declared = await preflight('demo', { transport: 'stdio', command: process.execPath, args: [], cwd: '~/work' }, { home: '/home/u', checkStat: async () => ({ isDirectory: () => true }) });
-  assert.equal(declared.entry.cwd, '/home/u/work');
+  assert.equal(declared.entry.cwd, join('/home/u', 'work'));
 });
 
 test('transport-specific fields are reported instead of silently dropped', () => {

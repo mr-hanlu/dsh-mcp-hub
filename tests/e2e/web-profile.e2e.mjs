@@ -15,11 +15,11 @@
  * 避免「环境没装 DSH」被当成通过。页面级流程见 `ui-page.e2e.mjs`。
  */
 import { spawn } from 'node:child_process';
-import { chmod, writeFile } from 'node:fs/promises';
+import { chmod, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
-import { bootProfile, createApi, createProfile, findDsh, skip, sleep } from './support/profile.mjs';
+import { bootProfile, createApi, createProfile, findDsh, runDsh, skip, sleep } from './support/profile.mjs';
 
 const repoRoot = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 const stdioFixture = repoRoot + '/tests/manual/echo-server.mjs';
@@ -53,7 +53,7 @@ async function main() {
   try {
     step('install', { ok: true, home: profile.home });
     session = await bootProfile({ bin, profile: profile.name, env: profile.env });
-    const call = createApi(session);
+    let call = createApi(session);
     const servers = async () => (await call('/servers')).body;
     // 轮询走轻量推送视图：状态与验证结论都在顶层，不必每次深拷贝工具 schema。
     const statusView = async () => (await call('/status')).body;
@@ -163,7 +163,7 @@ async function main() {
       if (code === 'NAME_CLEANING' || code === 'REVISION_CONFLICT') {
         if (code === 'NAME_CLEANING') {
           readd.cleaning += 1;
-          assert.match(String(reply.body?.message), /清理中/, '清理期的提示应说明正在清理上一个连接');
+          assert.match(String(reply.body?.error ?? reply.body?.message), /清理中/, '清理期的提示应说明正在清理上一个连接：' + JSON.stringify(reply.body));
         }
         if (readd.attempts >= 40) assert.fail('删除后同名重新添加一直失败：' + JSON.stringify(reply.body));
         await sleep(150);
@@ -295,9 +295,162 @@ async function main() {
     await removeRow('hubbad');
     await removeRow('hubcred');
 
+    // ---------- 阶段 3：宿主重启后恢复 ----------
+    // 桌面验收 2.x 的核心：重启 DSH 后配置、连接、工具、来源记录和上次失败原因都要回来，
+    // 而不是把「已保存」当成「已恢复」。这里停掉真实 Host 再用同一个 profile 起来。
+    revision = (await servers()).revision;
+    assert.equal((await call('/mutate', { action: 'save', revision, name: 'hubrestart', entry: stdioEntry })).body.saved, true);
+    const beforeRestart = await waitState('hubrestart', row => row?.state === 'connected', 'restart-connect');
+    step('restart-connect', { state: beforeRestart.row.state });
+
+    // 一个认证失败的条目：它的失败原因必须跨宿主重启保留下来。
+    // 不能用 127.0.0.1:1 这类 bad port——连接层错误会被判成可重试，验证迟迟不结算；
+    // 错误 token 走 401 快速失败（与阶段 2 的 hubbad 同一条路径）。
+    const deadEntry = { ...badEntry };
+    revision = (await servers()).revision;
+    assert.equal((await call('/mutate', { action: 'save', revision, name: 'hubdead', entry: deadEntry })).body.saved, true);
+    const deadFailed = await waitState('hubdead', row => row?.verification && row.verification.state !== 'verifying', 'restart-failure', 30000);
+    assert.equal(deadFailed.row.verification.state, 'failed', '连不上的条目应记为失败：' + JSON.stringify(deadFailed.row.verification));
+    const failureDetail = String(deadFailed.row.verification.detail);
+    step('restart-failure', { state: 'failed', detail: failureDetail });
+
+    // 手动导入的来源记录也存在 sources.json 里，重启后必须还能看到。
+    const imported = await call('/parse', { text: JSON.stringify({ mcpServers: { 'restart-import': { command: 'node', args: ['server.js'] } } }), filename: 'restart-import.json' });
+    assert.equal(imported.status, 200, '导入来源失败：' + JSON.stringify(imported.body));
+    const source = imported.body?.sources?.[0];
+    assert.ok(source?.id?.startsWith('file-'), '导入来源应带 file- 前缀：' + JSON.stringify(imported.body));
+    assert.equal(source.candidates.length, 1);
+    step('restart-import', { id: source.id, candidates: source.candidates.length });
+
+    await session.stop();
+    session = await bootProfile({ bin, profile: profile.name, env: profile.env });
+    call = createApi(session);
+    const recovered = await waitState('hubrestart', row => row?.state === 'connected', 'restart-recover', 90000);
+    step('restart-recover', { state: recovered.row.state, ms: recovered.ms });
+    const recoveredTools = await call('/tools', { name: 'hubrestart' });
+    assert.equal(recoveredTools.body?.tools?.length, 1, '重启后工具没有恢复注册：' + JSON.stringify(recoveredTools.body));
+
+    const afterRestart = await servers();
+    const deadRow = afterRestart.servers.find(item => item.name === 'hubdead');
+    assert.equal(deadRow?.verification?.state, 'failed', '重启后上次失败原因没有恢复：' + JSON.stringify(deadRow));
+    assert.equal(String(deadRow.verification.detail), failureDetail, '重启后的失败原因文本应保持一致');
+    const sourceList = await call('/sources');
+    const restoredSource = (sourceList.body?.sources ?? []).find(item => item.id === source.id);
+    assert.ok(restoredSource, '重启后手动导入的来源丢失');
+    assert.equal(restoredSource.candidates.length, 1);
+    step('restart-persist', { verification: deadRow.verification.state, source: restoredSource.id });
+
+    await removeRow('hubrestart');
+    await removeRow('hubdead');
+    const sourceRemoved = await call('/source-remove', { id: source.id });
+    assert.equal(sourceRemoved.body?.sources?.some?.(item => item.id === source.id) ?? false, false, '来源删除后不应再出现');
+
+    // ---------- 阶段 4：删除后重新导入 / 外部配置变更 / 连续操作 ----------
+    // 4.1 删除服务后，同一条手动来源必须重新变成「可导入」：来源记录不因服务删除失效，
+    // 重复识别也不能留下指向已删除条目的幽灵标记。
+    const reimport = await call('/parse', {
+      text: JSON.stringify({ mcpServers: { 'reimport-one': { command: process.execPath, args: [stdioFixture] } } }),
+      filename: 'reimport.json',
+    });
+    assert.equal(reimport.status, 200, '导入来源失败：' + JSON.stringify(reimport.body));
+    const reimportSource = reimport.body.sources[0];
+    const reimportCandidate = reimportSource.candidates[0];
+    revision = (await servers()).revision;
+    const reimportSaved = await call('/mutate', { action: 'save', revision, name: 'reimport-one', candidateId: reimportCandidate.id, entry: reimportCandidate.entry });
+    assert.equal(reimportSaved.body?.saved, true, '从来源导入失败：' + JSON.stringify(reimportSaved.body));
+    await waitState('reimport-one', row => row?.state === 'connected', 'reimport-connect');
+    const marked = (await call('/sources')).body.sources.find(item => item.id === reimportSource.id)?.candidates[0];
+    assert.equal(marked?.duplicate, 'reimport-one', '已导入的来源应标记重复：' + JSON.stringify(marked));
+    await removeRow('reimport-one');
+    const cleared = (await call('/sources')).body.sources.find(item => item.id === reimportSource.id)?.candidates[0];
+    assert.equal(cleared?.duplicate, undefined, '删除服务后来源仍被标记为已导入：' + JSON.stringify(cleared));
+    assert.equal(cleared?.nameConflict, false);
+    revision = (await servers()).revision;
+    const reimportAgain = await call('/mutate', { action: 'save', revision, name: 'reimport-one', candidateId: reimportCandidate.id, entry: reimportCandidate.entry });
+    assert.equal(reimportAgain.body?.saved, true, '删除后重新导入失败：' + JSON.stringify(reimportAgain.body));
+    await waitState('reimport-one', row => row?.state === 'connected', 'reimport-again');
+    step('reimport-after-delete', { duplicate: marked.duplicate, cleared: cleared.duplicate, source: reimportSource.id });
+    await removeRow('reimport-one');
+    await call('/source-remove', { id: reimportSource.id });
+
+    // 4.2 外部配置变更：绕过本插件直接改 profile 的 cordis.patch.yml，模拟官方 Manager
+    // 或用户手改。正在运行的 Manager 应热加载新条目并真正连上，删除后也不能留幽灵行。
+    const patchPath = join(profile.home, 'profiles', profile.name, 'cordis.patch.yml');
+    const originalPatch = await readFile(patchPath, 'utf8');
+    const external = { transport: 'stdio', command: process.execPath, args: [stdioFixture] };
+    const inlineServers = '    servers: {}\n';
+    const blockServers = '    servers:\n';
+    const externalText = `      extedit:\n        transport: ${external.transport}\n        command: ${JSON.stringify(external.command)}\n        args:\n          - ${JSON.stringify(external.args[0])}\n        enabled: true\n`;
+    let patchedPatch;
+    if (originalPatch.includes(inlineServers)) patchedPatch = originalPatch.replace(inlineServers, blockServers + externalText);
+    else if (originalPatch.includes(blockServers)) patchedPatch = originalPatch.replace(blockServers, blockServers + externalText);
+    else patchedPatch = originalPatch;
+    assert.notEqual(patchedPatch, originalPatch, '找不到 mcp-manager 的 servers 位置，无法模拟外部写入');
+    await writeFile(patchPath, patchedPatch);
+    const externalAdded = await waitState('extedit', row => row?.state === 'connected', 'external-add', 30000);
+    const externalRow = (await servers()).servers.find(item => item.name === 'extedit');
+    // 直接写 cordis.patch.yml 等于写进 mcp-manager 的宿主层配置，插件无法区分「用户手改」
+    // 与「官方 Manager 注册」；按既有边界展示为不可编辑的宿主行，而不是伪造可编辑状态。
+    assert.ok(['inherited', 'plugin'].includes(externalRow?.managed), '外部写入的条目应按宿主配置展示：' + JSON.stringify(externalRow));
+    assert.equal(externalRow?.editable, false);
+    assert.equal(externalRow?.removable, false);
+    step('external-config-add', { state: externalAdded.row.state, ms: externalAdded.ms, managed: externalRow.managed });
+    await writeFile(patchPath, originalPatch);
+    const externalRemovedMs = await (async () => {
+      const started = Date.now();
+      while (Date.now() - started < 15000) {
+        if (!(await servers()).servers.some(item => item.name === 'extedit')) return Date.now() - started;
+        await sleep(300);
+      }
+      assert.fail('外部删除后列表仍有残留条目');
+    })();
+    step('external-config-remove', { ms: externalRemovedMs });
+
+    // 4.3 连续操作：同一个 revision 并发保存三条配置，只能有一条成功，其余必须明确报
+    // 冲突；写队列不能互相覆盖，也不能留下半条状态。
+    revision = (await servers()).revision;
+    const burstNames = ['burst-a', 'burst-b', 'burst-c'];
+    const burstEntry = { transport: 'stdio', command: process.execPath, args: [stdioFixture], cwd: repoRoot, env: {} };
+    const burst = await Promise.all(burstNames.map(name => call('/mutate', { action: 'save', revision, name, entry: burstEntry })));
+    const burstCodes = burst.map(reply => reply.body?.saved ? 'saved' : reply.body?.code);
+    assert.equal(burstCodes.filter(code => code === 'saved').length, 1, '并发保存应只有一条成功：' + JSON.stringify(burstCodes));
+    assert.equal(burstCodes.filter(code => code === 'REVISION_CONFLICT').length, 2, '其余并发保存应报 revision 冲突：' + JSON.stringify(burstCodes));
+    for (const name of burstNames) await removeRow(name);
+    step('burst-saves', { codes: burstCodes });
+
     const final = await servers();
     assert.equal(final.servers.length, baseline.servers.length, '清理后仍有残留条目');
     step('cleanup', { count: final.servers.length });
+    // ---------- 阶段 5：验证过程中关闭 / 测试期间卸载 ----------
+    // 5.1 保存后验证还在跑就把 Host 停掉。重启后不能出现「验证成功」的假象：
+    // 要么是明确的中断/取消，要么没有结论，但绝不能是 ok；条目本身仍应连上。
+    const stopEntry = { transport: 'stdio', command: process.execPath, args: [stdioFixture], cwd: repoRoot, env: { MCP_ECHO_DELAY: '2500' }, startupTimeoutMs: 15000 };
+    revision = (await servers()).revision;
+    const stopSaved = await call('/mutate', { action: 'save', revision, name: 'hubstop', entry: stopEntry });
+    assert.equal(stopSaved.body?.verifying, true, '慢验证应立即返回进行中：' + JSON.stringify(stopSaved.body));
+    await sleep(250);
+    await session.stop();
+    session = await bootProfile({ bin, profile: profile.name, env: profile.env });
+    call = createApi(session);
+    const stopRow = await waitState('hubstop', row => row && row.state !== 'disabled' && (row.verification?.state ?? 'none') !== 'verifying', 'stop-during-verify', 30000);
+    assert.notEqual(stopRow.row.verification?.state, 'ok', '关闭时的验证不应记为成功：' + JSON.stringify(stopRow.row.verification));
+    const stopRecovered = await waitState('hubstop', row => row?.state === 'connected', 'stop-recover', 60000);
+    const stopTools = await call('/tools', { name: 'hubstop' });
+    assert.equal(stopTools.body?.tools?.length, 1, '关闭后重启的工具没有恢复：' + JSON.stringify(stopTools.body));
+    step('stop-during-verify', { verification: stopRow.row.verification?.state ?? 'none', detail: stopRow.row.verification?.detail ?? null, recovered: stopRecovered.ms });
+    await removeRow('hubstop');
+
+    // 5.2 测试期间卸载插件：移除包并重启后，插件路由必须整体消失，而不是残留半套 API。
+    await session.stop();
+    session = null;
+    runDsh(bin, ['plugin', '--profile', profile.name, 'remove', 'dsh-mcp-hub'], profile.env);
+    const dumped = runDsh(bin, ['--profile', profile.name, '--dump-config'], profile.env);
+    assert.equal(dumped.includes('# == dsh-mcp-hub'), false, '卸载后组合配置里不应再有插件层');
+    session = await bootProfile({ bin, profile: profile.name, env: profile.env, probe: false });
+    const gone = await fetch(session.base + '/api/dsh-mcp-hub/servers', { headers: { cookie: session.cookies } });
+    assert.equal(gone.status, 404, '卸载后插件路由应返回 404，实际 ' + gone.status);
+    step('uninstall', { status: gone.status, layer: false });
+
   } finally {
     httpServer?.stop();
     if (session) await session.stop();

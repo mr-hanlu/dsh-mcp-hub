@@ -103,6 +103,23 @@ export class HubService {
         }
       } catch (error) { if (error.code !== 'ENOENT') this.ctx.logger?.warn?.('MCP Hub 来源记录不可读，将继续读取服务配置'); }
     }
+    // A Host stopped while a save was still verifying leaves `state: 'verifying'`
+    // on disk. No probe resumes on the next run, so the row would read "verifying"
+    // forever; settle it as an interrupted failure rather than a false pass.
+    let interrupted = false;
+    for (const [name, record] of Object.entries(this.lastVerifications)) {
+      if (record?.state !== 'verifying') continue;
+      this.lastVerifications[name] = {
+        ...record, state: 'failed',
+        detail: '验证被中断：DSH 在验证过程中关闭，请重新验证',
+        finishedAt: Date.now(),
+      };
+      interrupted = true;
+    }
+    if (interrupted) {
+      try { await this.persistMeta(); }
+      catch { this.ctx.logger?.warn?.('MCP Hub 无法写入被中断的验证结论'); }
+    }
     return this;
   }
   preflightOptions(extra = {}) {

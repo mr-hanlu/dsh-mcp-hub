@@ -9,9 +9,20 @@ import { HubService } from '../../src/host/service.js';
 
 // Keep official Host packages outside the shipped plugin's dependency tree.
 const modules = process.env.DSH_TEST_MODULES;
-if (!modules) throw new Error('Set DSH_TEST_MODULES to a directory with official DSH 0.2.2 packages (see README).');
+if (!modules) throw new Error('Set DSH_TEST_MODULES to a directory containing the official DSH packages (see README「真实集成测试」).');
 const require = createRequire(join(modules, 'package.json'));
 const load = async name => import(pathToFileURL(require.resolve(name)).href);
+// 版本不符时要在这里明确报错，而不是等某个内部 API 变了才在用例深处失败。
+let dshVersion;
+try {
+  dshVersion = JSON.parse(await readFile(require.resolve('@deepseek-ai/dsh-app-boot/package.json'), 'utf8')).version;
+} catch { /* 官方包不一定导出 package.json；读不到就交给下面的 import 报缺包 */ }
+if (dshVersion) {
+  const [major, minor, patch] = dshVersion.split(/[.-]/);
+  if (major !== '0' || minor !== '2' || Number(patch) < 2) {
+    throw new Error(`DSH_TEST_MODULES 指向的官方 DSH 版本是 ${dshVersion}；本插件兼容 0.2.2–0.2.x（engines.dsh >=0.2.2-0 <0.3.0-0），请按 README「真实集成测试」重装对应版本。`);
+  }
+}
 const { Context } = await load('@deepseek-ai/cordis');
 const { default: Loader } = await load('@deepseek-ai/cordis-plugin-loader');
 const { default: Manager } = await load('@deepseek-ai/dsh-mcp-manager');

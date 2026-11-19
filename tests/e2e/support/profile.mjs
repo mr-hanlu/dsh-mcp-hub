@@ -52,14 +52,17 @@ export function runDsh(bin, args, env, { timeoutMs = 180000 } = {}) {
  * @param {string} options.repoRoot - 本仓库根目录。
  * @param {string} [options.name] - profile 名，默认 `e2e`。
  * @param {string} [options.template] - 随附模板名，UI 测试需要 `web`。
+ * @param {boolean} [options.install] - 是否直接装仓库目录；tarball 验收要先建空 profile。
  */
-export async function createProfile({ bin, repoRoot, name = 'e2e', template = 'web' }) {
+export async function createProfile({ bin, repoRoot, name = 'e2e', template = 'web', install = true }) {
   const home = await mkdtemp(join(tmpdir(), 'dsh-mcp-hub-e2e-'));
   const env = { ...process.env, DSH_HOME: home };
   runDsh(bin, ['--profile', name, '--from-default-profile', template, '--dump-config'], env);
-  runDsh(bin, ['plugin', '--profile', name, 'add', repoRoot], env);
-  const dumped = runDsh(bin, ['--profile', name, '--dump-config'], env);
-  if (!dumped.includes('# == dsh-mcp-hub')) throw new Error('组合后的配置里没有 dsh-mcp-hub 层');
+  if (install) runDsh(bin, ['plugin', '--profile', name, 'add', repoRoot], env);
+  if (install) {
+    const dumped = runDsh(bin, ['--profile', name, '--dump-config'], env);
+    if (!dumped.includes('# == dsh-mcp-hub')) throw new Error('组合后的配置里没有 dsh-mcp-hub 层');
+  }
   return {
     home,
     env,
@@ -70,7 +73,7 @@ export async function createProfile({ bin, repoRoot, name = 'e2e', template = 'w
 }
 
 /** 启动 profile，返回带 token 的地址、会话 cookie，以及 stop()。 */
-export async function bootProfile({ bin, profile, env, extraArgs = ['--no-open'] }) {
+export async function bootProfile({ bin, profile, env, extraArgs = ['--no-open'], probe = true }) {
   const child = spawn(bin, ['--profile', profile, ...extraArgs], { env, stdio: ['ignore', 'pipe', 'pipe'] });
   let output = '';
   const stopChild = () => { try { child.kill('SIGTERM'); } catch {} };
@@ -92,8 +95,10 @@ export async function bootProfile({ bin, profile, env, extraArgs = ['--no-open']
     const response = await fetch(base + '/?token=' + encodeURIComponent(token), { redirect: 'manual' });
     const cookies = (response.headers.getSetCookie?.() ?? []).map(value => value.split(';')[0]).join('; ');
     if (!cookies) throw new Error('打开页面没有拿到会话 cookie（HTTP ' + response.status + '）');
-    const probe = await fetch(base + '/api/dsh-mcp-hub/servers', { headers: { cookie: cookies } });
-    if (probe.status !== 200) throw new Error('会话 cookie 未生效：/servers 返回 ' + probe.status);
+    if (probe) {
+      const checked = await fetch(base + '/api/dsh-mcp-hub/servers', { headers: { cookie: cookies } });
+      if (checked.status !== 200) throw new Error('会话 cookie 未生效：/servers 返回 ' + checked.status);
+    }
     return {
       url,
       base,

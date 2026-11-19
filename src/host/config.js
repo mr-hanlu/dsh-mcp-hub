@@ -248,12 +248,38 @@ export function resolveReferences(entry, ambient = process.env) {
   return { entry: resolved, unresolved: [...unresolved], references: referenceNames(entry) };
 }
 
+const DEFAULT_PATHEXT = '.COM;.EXE;.BAT;.CMD';
+
+/** Windows environment variable names are case-insensitive; config files use both PATH and Path. */
+function envValue(source, name) {
+  if (!source || typeof source !== 'object') return '';
+  const key = Object.keys(source).find(item => item.toUpperCase() === name);
+  return key ? source[key] : '';
+}
+
+/**
+ * Candidate paths for a bare command. On Windows `npx`/`uvx` are `npx.cmd`/`uvx.exe`,
+ * so probing only `join(PATH, command)` reports a valid configuration as missing.
+ * `platform` is injectable so the same code can be tested for Windows on any host.
+ */
+function commandPaths(command, { platform, searchPath, pathext }) {
+  const extensions = platform === 'win32' && !/\.[A-Za-z0-9]+$/.test(command)
+    ? (pathext || DEFAULT_PATHEXT).split(';').map(extension => extension.trim()).filter(Boolean)
+    : [''];
+  const names = [...new Set(extensions.map(extension => command + extension))];
+  if (isAbsolute(command)) return names;
+  const dirs = String(searchPath ?? '').split(platform === 'win32' ? ';' : ':');
+  return dirs.flatMap(dir => names.map(name => join(dir, name)));
+}
+
 /**
  * @param describeCredential - optional async credential lookup from the Host. An
  *   environment reference whose value lives in the DSH credential store (or a
  *   `.env` layer) is configured even though this process's environment is not.
+ * @param platform - defaults to the running host; tests inject 'win32' to cover
+ *   PATHEXT probing without a Windows machine.
  */
-export async function preflight(name, input, { env = process.env, home, cwd, checkAccess = access, checkStat = stat, referenceStorage = 'template', describeCredential } = {}) {
+export async function preflight(name, input, { env = process.env, home, cwd, checkAccess = access, checkStat = stat, referenceStorage = 'template', describeCredential, platform = process.platform } = {}) {
   assertEntryShape(input);
   const checks = [];
   // hard 检查即使在「保存为停用」时也必须通过：它们决定条目本身是否合法。
@@ -295,7 +321,11 @@ export async function preflight(name, input, { env = process.env, home, cwd, che
     if (validCommand && /[\\/]/.test(entry.command) && !isAbsolute(entry.command)) entry.command = resolve(checkCwd, entry.command);
     let executable;
     if (validCommand && !entry.command.includes('${credential:')) {
-      const paths = isAbsolute(entry.command) ? [entry.command] : (entry.env?.PATH ?? env.PATH ?? '').split(process.platform === 'win32' ? ';' : ':').map(path => join(path, entry.command));
+      const paths = commandPaths(entry.command, {
+        platform,
+        searchPath: envValue(entry.env, 'PATH') || envValue(env, 'PATH'),
+        pathext: envValue(entry.env, 'PATHEXT') || envValue(env, 'PATHEXT'),
+      });
       for (const path of paths) { try { await checkAccess(path, constants.X_OK); if ((await checkStat(path)).isFile()) { executable = path; break; } } catch {} }
     }
     const deferred = validCommand && entry.command.includes('${credential:');
