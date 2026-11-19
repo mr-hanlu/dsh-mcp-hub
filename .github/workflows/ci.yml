@@ -95,6 +95,11 @@ jobs:
           DSH_E2E_REQUIRED: '1'
         run: npm run test:registry
 
+      - name: OAuth 授权验收（本地假授权服务器）
+        env:
+          DSH_E2E_REQUIRED: '1'
+        run: npm run test:oauth
+
       - name: 页面层端到端
         # 这些端到端都默认占用 127.0.0.1:3080，必须串行跑。
         env:

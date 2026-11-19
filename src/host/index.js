@@ -12,6 +12,7 @@ const ROUTES = [
   ['scan', 'POST'], ['parse', 'POST'], ['test', 'POST'], ['reveal', 'POST'],
   ['mutate', 'POST'], ['cancel', 'POST'], ['probe', 'POST'], ['tools', 'POST'], ['wait', 'POST'], ['source-remove', 'POST'], ['export', 'POST'],
   ['catalog-search', 'POST'], ['catalog-detail', 'POST'],
+  ['oauth-start', 'POST'], ['oauth-status', 'POST'], ['oauth-cancel', 'POST'],
 ];
 
 /** 用户可在 profile 的 cordis.patch.yml 中覆盖；patch 层跨升级保留。 */
@@ -57,6 +58,9 @@ export function createHandler(getService, route, log) {
       if (route === 'export') return send(200, await service.exportBackup(body));
       if (route === 'catalog-search') return send(200, await service.catalogSearch(body, request.signal));
       if (route === 'catalog-detail') return send(200, await service.catalogDetail(body, request.signal));
+      if (route === 'oauth-start') return send(200, await service.startOAuth(body));
+      if (route === 'oauth-status') return send(200, await service.oauthStatus(body));
+      if (route === 'oauth-cancel') return send(200, service.cancelOAuth(body));
       if (route === 'test') return send(200, await service.test(body, request.signal));
       if (route === 'reveal') return send(200, await service.reveal(body));
       if (route === 'mutate') return send(200, await service.mutate(body));

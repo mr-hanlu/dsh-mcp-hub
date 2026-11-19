@@ -10,6 +10,7 @@ import { createCatalog } from './catalog.js';
 import { fail } from '../shared/errors.js';
 import { MASK, connectionFingerprint, connectionSkeleton, includesConfig, preflight, redact, restoreMasked, scanSources } from './config.js';
 import { commitCredentials, credentialOwners, credentialNames, inlineCredentials, isCredentialTemplate, planCredentials } from './vault.js';
+import { discover, registerClient, pkcePair, authorizeUrl, exchangeCode, refreshGrant, grantFromRecord, grantNeedsRefresh, listenCallback, oauthKey, oauthReference } from './oauth.js';
 
 /** Chinese wording for the manager's terminal stop reasons. */
 const REASON_TEXT = {
@@ -70,6 +71,12 @@ export class HubService {
     this.candidates = new Map();
     this.sourceGroups = [];
     this.verifications = new Map();
+    this.oauth = Object.create(null);
+    this.oauthAttempts = new Map();
+    this.oauthContexts = new Map();
+    this.oauthFlows = new Map();
+    this.oauthRefreshing = new Set();
+    this.oauthTimer = null;
     this.importBatches = new Map();
     this.statusWatchers = new Set();
     this.verificationTimer = null;
@@ -92,6 +99,9 @@ export class HubService {
           if (Number.isInteger(parsed.version) && parsed.origins && typeof parsed.origins === 'object') {
             this.origins = Object.assign(Object.create(null), parsed.origins);
             this.lastVerifications = Object.assign(Object.create(null), parsed.verifications ?? {});
+            if (parsed.oauth && typeof parsed.oauth === 'object' && !Array.isArray(parsed.oauth)) {
+              this.oauth = Object.assign(Object.create(null), parsed.oauth);
+            }
           } else this.origins = Object.assign(Object.create(null), parsed); // legacy: a bare origins map
           if (Array.isArray(parsed.sources)) {
             this.sourceGroups = parsed.sources
@@ -123,6 +133,9 @@ export class HubService {
       try { await this.persistMeta(); }
       catch { this.ctx.logger?.warn?.('MCP Hub 无法写入被中断的验证结论'); }
     }
+    // Restore OAuth grants in the background: setting a reference reconnects, and
+    // a Host start must not wait for a refresh round trip.
+    if (Object.keys(this.oauth).length) this.reconcileOAuth().catch(error => this.ctx.logger?.warn?.('MCP Hub 无法恢复 OAuth 授权：' + (error?.message ?? error)));
     return this;
   }
   preflightOptions(extra = {}) {
@@ -165,6 +178,267 @@ export class HubService {
     if (planned.reused?.length) report.reused = planned.reused;
     if (planned.missing?.length) report.missing = planned.missing;
     return Object.keys(report).length ? report : undefined;
+  }
+  /** The optional authorization service; absent on older Hosts. */
+  authorizationProvider() {
+    const provider = serviceOf(this.ctx, 'authorization');
+    if (!provider || typeof provider.begin !== 'function' || typeof provider.registerFlow !== 'function') return undefined;
+    return provider;
+  }
+  /** What the page needs to render the right OAuth affordance, without secrets. */
+  oauthView(name) {
+    const marker = this.oauth[name];
+    if (!marker) return undefined;
+    const attempt = this.oauthAttempts.get(name);
+    const state = attempt && attempt.state !== 'authorized' ? attempt.state : marker.state ?? 'needs-auth';
+    return {
+      state,
+      ref: marker.ref,
+      expiresAt: marker.expiresAt,
+      error: attempt?.error ?? marker.error,
+    };
+  }
+  /**
+   * Start one browser authorization. Discovery and registration happen before
+   * `begin` so the request can return the URL immediately; the flow itself waits
+   * for the loopback callback in the background.
+   */
+  async startOAuth(body) {
+    const name = body.name;
+    if (typeof name !== 'string') fail('REQUEST_INVALID', '缺少服务名称');
+    const entry = this.descriptor({ fresh: true }).value?.servers?.[name];
+    if (!entry) fail('ROW_NOT_FOUND', '找不到该服务，请刷新后重试');
+    const marker = this.oauth[name];
+    if (!marker) fail('OAUTH_NOT_CONFIGURED', '这个服务没有配置 OAuth 登录，请先编辑并选择 OAuth 认证');
+    const running = this.oauthAttempts.get(name);
+    if (running?.state === 'authorizing') return { state: 'authorizing', url: running.url };
+    const authorization = this.authorizationProvider();
+    if (!authorization) fail('OAUTH_UNAVAILABLE', '当前 DSH 没有挂载授权服务，无法发起 OAuth 登录。请升级到 0.2.2 及以上版本');
+    const credentials = this.credentialsProvider();
+    if (!credentials) fail('CREDENTIAL_UNAVAILABLE', '当前 DSH 没有挂载凭证服务，无法保存 OAuth 授权');
+
+    const discovered = await discover(entry.url);
+    const pkce = pkcePair();
+    const stateToken = randomUUID();
+    const callback = await listenCallback();
+    let client;
+    try { client = await registerClient(discovered.as, callback.redirectUri); }
+    catch (error) { callback.close(); throw error; }
+    const url = authorizeUrl(discovered.as, {
+      clientId: client.clientId, redirectUri: callback.redirectUri,
+      challenge: pkce.challenge, state: stateToken, resource: discovered.resource,
+    });
+    const attempt = {
+      state: 'authorizing', url, startedAt: Date.now(),
+      controller: new AbortController(), callback, error: undefined, done: undefined,
+    };
+    this.oauthAttempts.set(name, attempt);
+    this.oauthContexts.set(name, {
+      name, marker, entry, discovered, client, pkce, stateToken, callback, credentials,
+    });
+    this.ensureOAuthFlow(name, authorization);
+    const interaction = {
+      notify: notice => { if (typeof notice?.url === 'string') attempt.url = notice.url; },
+      prompt: async () => { throw new Error('OAuth 流程不需要文本输入'); },
+    };
+    attempt.done = authorization.begin({ key: marker.key, method: 'oauth', interaction, signal: attempt.controller.signal })
+      .then(outcome => {
+        if (outcome?.status === 'authorized') {
+          attempt.state = 'authorized';
+          this.startVerification(name, entry);
+        } else {
+          attempt.state = 'cancelled';
+          attempt.error = '授权已取消';
+        }
+      })
+      .catch(error => {
+        attempt.state = 'failed';
+        attempt.error = error?.message ?? '授权失败';
+      })
+      .finally(() => {
+        attempt.callback.close();
+        this.oauthContexts.delete(name);
+        this.notify();
+        // Keep the URL around briefly so a polling page can still render the error.
+        setTimeout(() => { if (this.oauthAttempts.get(name) === attempt) this.oauthAttempts.delete(name); }, 60000).unref?.();
+      });
+    return { state: 'authorizing', url };
+  }
+  async oauthStatus(body) {
+    const name = body.name;
+    const marker = this.oauth?.[name];
+    if (!marker) return { state: 'none' };
+    const attempt = this.oauthAttempts.get(name);
+    if (attempt?.state === 'authorizing') return { state: 'authorizing', url: attempt.url, expiresAt: marker.expiresAt };
+    if (attempt?.state === 'failed') return { state: 'failed', error: attempt.error, url: attempt.url };
+    const credentials = this.credentialsProvider();
+    if (!credentials) return { state: 'unavailable', error: '凭证服务未挂载', ref: marker.ref };
+    let grant;
+    try {
+      const record = await credentials.readRecord(marker.key);
+      grant = grantFromRecord(record);
+    } catch { grant = undefined; }
+    if (grant && (!Number.isFinite(grant.expiresAt) || grant.expiresAt > Date.now())) {
+      return { state: 'authorized', expiresAt: grant.expiresAt, scope: grant.scope, ref: marker.ref };
+    }
+    if (grant?.refreshToken && !marker.error) {
+      // Expired but refreshable: kick a renewal so the page does not sit on
+      // "refreshing" until the next 60s tick. A previous failure needs the user.
+      void this.refreshOAuth(name);
+      return { state: 'refreshing', expiresAt: grant.expiresAt, ref: marker.ref };
+    }
+    return { state: 'needs-auth', error: attempt?.error ?? marker.error, ref: marker.ref };
+  }
+  cancelOAuth(body) {
+    const name = body.name;
+    const attempt = this.oauthAttempts.get(name);
+    if (attempt) {
+      try { attempt.controller.abort(); } catch {}
+      try { attempt.callback.close(); } catch {}
+      attempt.state = 'cancelled';
+      attempt.error = '授权已取消';
+    }
+    const marker = this.oauth?.[name];
+    if (marker) { try { this.authorizationProvider()?.cancel(marker.key); } catch {} }
+    return { ok: true };
+  }
+  ensureOAuthFlow(name, authorization) {
+    if (this.oauthFlows.has(name)) return;
+    const marker = this.oauth[name];
+    if (!marker) return;
+    try {
+      const dispose = authorization.registerFlow({
+        key: marker.key,
+        label: `MCP Hub：${name}`,
+        methods: [{ id: 'oauth', label: '浏览器登录' }],
+        run: session => this.runOAuthFlow(name, session),
+      });
+      this.oauthFlows.set(name, dispose);
+    } catch (error) {
+      // DUPLICATE_FLOW means this process already registered it (or a stale flow
+      // survived); re-registering is not needed for the attempt to run.
+      if (!/DUPLICATE_FLOW|already/i.test(String(error?.message ?? ''))) throw error;
+    }
+  }
+  async runOAuthFlow(name, session) {
+    const context = this.oauthContexts.get(name);
+    if (!context) fail('OAUTH_STALE', '这次授权已失效，请重新点击授权');
+    const { callback, stateToken, pkce, client, discovered, marker, credentials, entry } = context;
+    const signal = session.signal;
+    if (signal?.aborted) fail('OAUTH_CANCELLED', '授权已取消');
+    await callback.wait;
+    if (callback.state.error) fail('OAUTH_DENIED', '授权服务器返回：' + callback.state.error);
+    if (callback.state.received !== stateToken) fail('OAUTH_STATE_MISMATCH', '回调 state 不匹配，已拒绝这次授权');
+    if (!callback.state.code) fail('OAUTH_DENIED', '没有收到授权码，请重新授权');
+    const grant = await exchangeCode(discovered.as, {
+      clientId: client.clientId, clientSecret: client.clientSecret,
+      code: callback.state.code, verifier: pkce.verifier,
+      redirectUri: callback.redirectUri, resource: discovered.resource,
+    });
+    // Credential records are JSON: an `undefined` client_secret (the common case
+    // for public clients) would make the whole record unwritable.
+    const payload = JSON.parse(JSON.stringify({
+      ...grant,
+      clientId: client.clientId,
+      clientSecret: client.clientSecret,
+      resource: discovered.resource,
+      authorizedAt: Date.now(),
+    }));
+    await session.commit({ kind: 'grant', payload });
+    // Writing the reference is what tells mcp-client to reconnect with the token.
+    await credentials.set(marker.ref, grant.accessToken);
+    this.oauth[name] = {
+      ...marker, state: 'authorized', authorizedAt: Date.now(),
+      expiresAt: grant.expiresAt, scope: grant.scope, error: undefined,
+    };
+    try { await this.persistMeta(); } catch { this.ctx.logger?.warn?.('MCP Hub 无法写入 OAuth 授权状态'); }
+    this.startOAuthTicker();
+    return { token: grant.accessToken, entry };
+  }
+  startOAuthTicker() {
+    if (this.oauthTimer || this.closed) return;
+    this.oauthTimer = setInterval(() => { this.refreshDueOAuth().catch(error => this.ctx.logger?.warn?.('MCP Hub 刷新 OAuth 失败：' + (error?.message ?? error))); }, 60000);
+    this.oauthTimer.unref?.();
+  }
+  /** Restore grants on start: set the reference if it is missing, refresh if due. */
+  async reconcileOAuth() {
+    if (this.closed) return;
+    const credentials = this.credentialsProvider();
+    if (!credentials || !Object.keys(this.oauth).length) return;
+    for (const [name, marker] of Object.entries(this.oauth)) {
+      try {
+        const record = await credentials.readRecord(marker.key);
+        const grant = grantFromRecord(record, {});
+        if (!grant) { marker.state = 'needs-auth'; continue; }
+        const info = await this.describeCredential(marker.ref);
+        if (!info?.configured) await credentials.set(marker.ref, grant.accessToken);
+        if (grantNeedsRefresh(grant)) { await this.refreshOAuth(name, credentials); continue; }
+        Object.assign(marker, { state: 'authorized', expiresAt: grant.expiresAt, scope: grant.scope });
+      } catch (error) {
+        marker.state = 'needs-auth';
+        marker.error = error?.message;
+      }
+    }
+    await this.persistMeta().catch(() => {});
+    this.startOAuthTicker();
+  }
+  async refreshDueOAuth() {
+    if (this.closed) return;
+    const credentials = this.credentialsProvider();
+    if (!credentials) return;
+    for (const [name, marker] of Object.entries(this.oauth)) {
+      if (marker.state !== 'authorized') continue;
+      try {
+        const record = await credentials.readRecord(marker.key);
+        const grant = grantFromRecord(record, {});
+        if (grant && grantNeedsRefresh(grant)) await this.refreshOAuth(name, credentials);
+      } catch { /* 单个服务刷新失败不影响其他服务 */ }
+    }
+  }
+  async refreshOAuth(name, credentials = this.credentialsProvider()) {
+    if (!credentials || this.oauthRefreshing.has(name)) return;
+    const marker = this.oauth[name];
+    if (!marker) return;
+    this.oauthRefreshing.add(name);
+    try {
+      const record = await credentials.readRecord(marker.key);
+      const grant = grantFromRecord(record, {});
+      if (!grant?.refreshToken) throw new Error('没有可用的刷新令牌');
+      if (!grant.clientId) throw new Error('授权记录缺少客户端信息，请重新授权');
+      const fresh = await refreshGrant({ token_endpoint: grant.tokenEndpoint }, {
+        clientId: grant.clientId, clientSecret: grant.clientSecret,
+        refreshToken: grant.refreshToken, resource: grant.resource,
+      });
+      const payload = JSON.parse(JSON.stringify({ ...grant, ...fresh, authorizedAt: grant.authorizedAt ?? Date.now() }));
+      await credentials.modifyRecord(marker.key, async () => ({ kind: 'grant', payload }));
+      await credentials.set(marker.ref, payload.accessToken);
+      Object.assign(marker, { state: 'authorized', expiresAt: payload.expiresAt, scope: payload.scope, error: undefined });
+      await this.persistMeta();
+    } catch (error) {
+      marker.state = 'needs-auth';
+      marker.error = '刷新登录失败：' + (error?.message ?? '未知原因');
+      await this.persistMeta().catch(() => {});
+    } finally { this.oauthRefreshing.delete(name); }
+  }
+  async removeOAuth(name) {
+    const marker = this.oauth[name];
+    if (!marker) return;
+    const attempt = this.oauthAttempts.get(name);
+    if (attempt) {
+      try { attempt.controller.abort(); } catch {}
+      try { attempt.callback.close(); } catch {}
+    }
+    try { this.authorizationProvider()?.cancel(marker.key); } catch {}
+    try { this.oauthFlows.get(name)?.(); } catch {}
+    this.oauthFlows.delete(name);
+    this.oauthAttempts.delete(name);
+    this.oauthContexts.delete(name);
+    delete this.oauth[name];
+    const credentials = this.credentialsProvider();
+    if (credentials) {
+      try { await credentials.deleteRecord(marker.key); } catch { /* 记录可能已不存在 */ }
+      try { await credentials.unset(marker.ref); } catch { /* 引用可能已不存在 */ }
+    }
   }
   descriptor({ fresh = false } = {}) {
     const now = Date.now();
@@ -266,6 +540,7 @@ export class HubService {
       // configured=false 表示条目已从配置移除、但实例仍在清理（官方会保留到宿主重启）。
       managed: owned ? (inherited ? 'inherited' : 'config') : live?.configured === false ? 'cleanup' : 'plugin',
       verification: this.verificationView(name),
+      oauth: this.oauthView(name),
       editable: owned, removable: owned && !inherited,
       source: this.origins[name] ?? { app: owned ? 'DSH 配置' : live?.configured === false ? '已删除，清理中' : '插件注册' },
       tools, toolCount: tools.length,
@@ -307,6 +582,7 @@ export class HubService {
           cleanupError: typeof status.result?.cleanupError === 'string' ? status.result.cleanupError : undefined,
           lastError: STATUS_WITH_ERROR.includes(status.state) ? this.safeError(diagnostic(status), entry) : undefined,
           verification: this.verificationView(name),
+          oauth: this.oauthView(name),
           editable: owned,
         };
       }),
@@ -511,6 +787,9 @@ export class HubService {
     return { entry: next, candidate };
   }
   async test(body, signal) {
+    if (body.auth === 'oauth' && this.oauth?.[body.name]?.state !== 'authorized') {
+      fail('OAUTH_NOT_AUTHORIZED', '请先保存该服务并在列表中完成「授权」；授权成功后会自动验证连接。');
+    }
     const current = this.descriptor().value?.servers;
     const { entry, candidate } = this.draft(body, current);
     if (candidate?.issues.length && !body.acceptUnsupported) return {ok:false, checks:[{label:'来源配置兼容性',ok:false,detail:'请先核对未迁移字段'}]};
@@ -603,10 +882,31 @@ export class HubService {
         if (renamed ? conflict : !body.originalName && conflict) fail('NAME_TAKEN', '已有同名服务器，请修改名称');
         if (!Object.hasOwn(entries, body.name) && cleaning) fail('NAME_CLEANING', this.cleaningMessage(live));
         const { entry, candidate } = this.draft(body, entries);
+        // OAuth rows carry a deliberate, still-unconfigured credential reference:
+        // the token appears only after the browser flow. The marker tells later
+        // requests which rows are OAuth, so a restart does not lose that fact.
+        const existingOAuth = this.oauth[body.name];
+        const oauthMode = body.auth === 'oauth' || (body.auth !== 'token' && Boolean(existingOAuth));
+        if (renamed && (oauthMode || existingOAuth)) fail('OAUTH_RENAME_UNSUPPORTED', 'OAuth 服务不支持改名，请删除后重新添加，或在原名称上重新授权');
+        let oauthRef;
+        if (oauthMode) {
+          if (entry.transport !== 'streamable-http') fail('OAUTH_TRANSPORT', 'OAuth 只适用于远程 HTTP 服务');
+          if (!this.credentialsProvider()) fail('CREDENTIAL_UNAVAILABLE', '当前 DSH 没有挂载凭证服务，无法保存 OAuth 授权。请先启用 DSH 凭证服务后重试');
+          if (!this.authorizationProvider()) fail('OAUTH_UNAVAILABLE', '当前 DSH 没有挂载授权服务，无法发起 OAuth 登录。请升级到 0.2.2 及以上版本');
+          oauthRef = existingOAuth?.ref ?? oauthReference(body.name);
+          // The header is owned by the flow: pointing it anywhere else would let a
+          // stale token win over the grant we are about to write.
+          entry.headers = { ...(entry.headers ?? {}), Authorization: `Bearer \${credential:${oauthRef}}` };
+        } else if (body.auth === 'token' && existingOAuth && String(entry.headers?.Authorization ?? '').includes(existingOAuth.ref)) {
+          // Switching back to plain headers must not leave the OAuth reference
+          // behind: the grant is about to be deleted and the row would only see a
+          // missing credential.
+          delete entry.headers.Authorization;
+        }
         // Secrets are moved into the credential store first, but only written once
         // validation passes; a failed write rolls the new values back.
         const planned = await this.planSecrets(entry, body, form, entries);
-        const checked = await preflight(body.name, planned.entry, this.preflightOptions());
+        const checked = await preflight(body.name, planned.entry, this.preflightOptions(oauthMode ? { deferredCredentials: [oauthRef] } : {}));
         if (candidate?.issues.length && !body.acceptUnsupported) fail('CONFIG_INVALID', '请先确认来源配置中的未迁移字段');
         // 硬约束即使在「保存为停用」时也必须通过，否则会把非法条目交给官方校验。
         if (checked.checks.some(check => check.hard && !check.ok)) return { ok: false, saved: false, checks: checked.checks, variables: checked.variables, credentials: this.credentialsReport(planned) };
@@ -640,6 +940,29 @@ export class HubService {
           try { await this.persistMeta(); } catch { warnings.push('配置已保存，但来源记录未能写入'); }
         }
         if (!next.enabled) return { ok: false, saved: true, draft: true, checks: checked.checks, variables: checked.variables, warnings, credentials: this.credentialsReport(planned), cleanup };
+        if (oauthMode) {
+          this.oauth[body.name] = {
+            ref: oauthRef, key: oauthKey(body.name), state: 'needs-auth',
+            authorizedAt: existingOAuth?.authorizedAt, expiresAt: existingOAuth?.expiresAt,
+          };
+          // Saving is not the same as verifying: the flow has not run yet, so a
+          // verifier would only wait out its budget and report a missing credential.
+          this.recordVerification(body.name, {
+            state: 'failed', detail: '需要登录授权后使用', startedAt: Date.now(), finishedAt: Date.now(),
+          });
+          try { await this.persistMeta(); } catch { warnings.push('配置已保存，但 OAuth 状态未能写入'); }
+          this.notify();
+          return {
+            ok: true, saved: true, oauth: { state: 'needs-auth' }, entry: redact(next),
+            credentials: this.credentialsReport(planned), cleanup,
+            checks: [...checked.checks, { label: '配置已保存', ok: true, detail: '请点击「授权」完成浏览器登录' }],
+            warnings,
+          };
+        }
+        if (body.auth === 'token' && existingOAuth) {
+          await this.removeOAuth(body.name);
+          try { await this.persistMeta(); } catch { warnings.push('配置已保存，但旧的 OAuth 状态未能清除'); }
+        }
         // 写入与验证分开：写成功即返回，验证在后台继续，结果通过 list().verification 回报。
         this.startVerification(body.name, next, changed ? previousStatus?.connectedAt : undefined);
         return { ok: true, saved: true, verifying: true, renamed, entry: redact(next), credentials: this.credentialsReport(planned), cleanup, checks: [...checked.checks, { label: '配置已保存', ok: true, detail: '正在后台验证正式连接与工具注册，结果会显示在服务列表' }], warnings };
@@ -652,6 +975,7 @@ export class HubService {
         delete this.origins[body.name];
         delete this.lastVerifications[body.name];
         this.verifications.delete(body.name);
+        if (this.oauth[body.name]) await this.removeOAuth(body.name);
         await this.persistMeta();
         return { ok: true, cleanup };
       }
@@ -1004,7 +1328,7 @@ export class HubService {
     const run = async () => {
       await mkdir(dirname(this.metaPath), { recursive: true, mode: 0o700 });
       const sources = this.sourceGroups.filter(source => source.manual === true && source.id.startsWith('file-'));
-      const payload = { version: META_VERSION, origins: this.origins, verifications: this.lastVerifications, sources };
+      const payload = { version: META_VERSION, origins: this.origins, verifications: this.lastVerifications, oauth: this.oauth, sources };
       const tmp = this.metaPath + '.' + randomUUID() + '.tmp';
       try {
         await writeFile(tmp, JSON.stringify(payload, null, 2), { mode: 0o600 });
@@ -1018,6 +1342,15 @@ export class HubService {
   close() {
     this.closed = true;
     this.probeLifetime.abort();
+    if (this.oauthTimer) { clearInterval(this.oauthTimer); this.oauthTimer = null; }
+    for (const [name, attempt] of this.oauthAttempts) {
+      try { attempt.controller.abort(); } catch {}
+      try { attempt.callback.close(); } catch {}
+      const marker = this.oauth[name];
+      if (marker) { try { this.authorizationProvider()?.cancel(marker.key); } catch {} }
+    }
+    for (const dispose of this.oauthFlows.values()) { try { dispose(); } catch {} }
+    this.oauthFlows.clear();
     for (const record of [...this.verifications.values()]) this.finishVerification(record, 'cancelled', '配置服务已关闭，验证已取消');
     this.stopVerificationTicker();
     for (const waiter of [...this.waiters]) waiter();

@@ -39,6 +39,7 @@
     "prepack": "node scripts/build.mjs",
     "test:e2e": "node tests/e2e/web-profile.e2e.mjs",
     "test:registry": "node tests/e2e/registry.e2e.mjs",
+    "test:oauth": "node tests/e2e/oauth.e2e.mjs",
     "test:ui": "node tests/e2e/ui-page.e2e.mjs",
     "test:layout": "node tests/e2e/ui-layout.e2e.mjs",
     "test:simulated": "node tests/e2e/simulated-sources.e2e.mjs",

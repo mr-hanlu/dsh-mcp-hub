@@ -29,6 +29,7 @@ MCP configuration is scattered across a dozen JSON / TOML files. Changing one co
 - **One place for every server**: add, edit, rename, enable, disable, restart, re-check and delete servers in the official Manager; reconnect failing rows in one click.
 - **Local config import**: Claude Code / Claude Desktop, Codex, Gemini CLI, VS Code / Copilot, Copilot CLI, Windsurf, Cursor and OpenCode — TOML / JSON / JSONC, desktop, CLI and server variants.
 - **Project-level discovery**: reads `.mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json` and friends from the launch directory, suffixing names on import so projects do not collide.
+- **OAuth sign-in**: built-in discovery, dynamic client registration and PKCE for OAuth-protected remote servers; tokens go to the DSH credential service, then reconnect automatically and refresh before expiry.
 - **Registry search**: query the official MCP Registry and pre-fill the editor with an npm / PyPI / OCI / remote HTTP server; **no auto-install, no silent writes**.
 - **Test before save**: test rows one by one, then write them all at once; a failure writes nothing, and an existing name is skipped.
 - **Background verification**: saving closes the dialog, then connection and tool registration finish in the background; a failure disables the server and keeps the reason instead of reporting success.
@@ -114,7 +115,7 @@ Three tabs: **Added**, **Local import** and **Registry search**. Full details �
 - Scanning only reads config files and checks access; it **never executes** their commands.
 - Source app configs are not modified or continuously synced; import is a one-time copy.
 - Servers registered by other plugins are read-only; inherited config can only be disabled; no data is migrated from other MCP managers.
-- Remote servers support static env / headers and DSH credential references only — **no OAuth login** yet.
+- Remote servers support static env / headers, DSH credential references and OAuth sign-in; per-tool permissions remain out of scope.
 - Per-tool permissions and Tool Search are out of scope for this version, and the UI keeps no placeholder entries.
 
 ## Documentation

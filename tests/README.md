@@ -11,6 +11,7 @@
 | 真实集成测试 | `npm run test:integration` | `DSH_TEST_MODULES` 指向官方包目录 | 缺环境时失败并提示准备命令 |
 | 接口端到端 | `npm run test:e2e` | 本机 `dsh` launcher | 找不到 `dsh` 时 SKIP |
 | Registry 边界 | `npm run test:registry` | `dsh` | 找不到时 SKIP |
+| OAuth 授权 | `npm run test:oauth` | `dsh` | 找不到时 SKIP |
 | 页面端到端 | `npm run test:ui` | `dsh` + Chrome + `puppeteer-core` | 找不到时 SKIP |
 | 布局截图 | `npm run test:layout` | 同页面端到端 | 找不到时 SKIP |
 | 模拟来源 | `npm run test:simulated` | `dsh` | 找不到时 SKIP |
@@ -22,7 +23,7 @@
 
 ## 单元测试
 
-`npm test` 直接跑 `tests/*.test.mjs`，用 Node 内置 `node:test` + `assert/strict`，不依赖测试框架。共 **148 项**。
+`npm test` 直接跑 `tests/*.test.mjs`，用 Node 内置 `node:test` + `assert/strict`，不依赖测试框架。共 **157 项**。
 
 | 文件 | 覆盖内容 |
 | --- | --- |
@@ -30,6 +31,7 @@
 | `catalog.test.mjs` | Registry 名称转合法别名；npm / PyPI / OCI 安装方式；分页与 nextCursor；非 active 过滤；错误映射；搜索与详情缓存 |
 | `config.test.mjs` | Codex TOML、OpenCode JSONC、空服务列表；未知字段与不兼容传输字段要显式核对；坏条目容错；扫描只读已知文件；脱敏与引用改写；`preflight` 的环境检查、不执行命令、不臆造 cwd；Windows 的 PATH / PATHEXT（`.cmd` / `.exe`、缺省顺序、大小写、已有扩展名不重复探测） |
 | `editor.test.mjs` | 编辑器的 `mcpServers` / `mcp_servers` / `servers` / OpenCode 容器解析；高德配置回归；缺变量时 preflight 报出变量名 |
+| `oauth.test.mjs` | OAuth 键名与引用、PKCE S256、PRM/AS 发现、DCR、授权码与 refresh 交换、grant 记录与刷新阈值、本机回调 |
 | `i18n.test.mjs` | 中英词条、动态消息正则、占位符替换 |
 | `probe.test.mjs` | 缺变量时完全不启动进程；握手成功但清理未确认不算通过；可执行文件不是 MCP 时失败；`tools/list` 失败仍算“已连接、可添加” |
 | `servers.test.mjs` | 清理中的行不占用名称；`NAME_CLEANING` 自动重试；`takenNames` 边界 |
@@ -72,6 +74,10 @@ DSH_TEST_MODULES=/tmp/dsh-mcp-hub-smoke npm run test:integration
 
 `tests/e2e/registry.e2e.mjs` 用一个本地假 Registry 覆盖目录接口的边界：两页搜索与 `nextCursor`、下架项过滤、未知字段不丢条目、详情转换（包安装参数、密钥变量提示、SSE 明确不支持）、HTTP 500、坏 JSON、超时、连接不上。通过临时 profile 的 `cordis.patch.yml` 覆盖 `catalogBaseUrl` / `catalogTimeoutMs` / `catalogCacheMs`，不访问真实公网，因此 CI 不会因 Registry 抖动而随机失败。
 
+### OAuth：`npm run test:oauth`
+
+`tests/e2e/oauth.e2e.mjs` 用一个本地假授权服务器（`tests/manual/oauth-fixture.mjs`：PRM、AS metadata、DCR、PKCE 校验、token 与 refresh）驱动真实 Host：保存为 `needs-auth`（不空等验证）→ 打开授权链接 → 回调换 token → 自动连接并注册工具 → 重启 Host 后免重授权（临近过期自动 refresh）→ 删除时清理凭证引用与授权记录 → 不存在的服务返回 404。不访问真实 OAuth 服务。
+
 ### 页面端到端：`npm run test:ui`
 
 `tests/e2e/ui-page.e2e.mjs`，**23 步**，用 `puppeteer-core` 驱动本机 Chrome，真的点一遍设置页：空状态、本地导入、JSON 逐行测试、批量添加、重名跳过、测试中取消、失败原因、保存后关闭、编辑后重新验证、密钥写入凭证、显示 / 复制 / 编辑密钥、删除确认等。失败时全页截图写到 `tests/e2e/artifacts/`。
@@ -88,7 +94,7 @@ Chrome 默认取 macOS 路径，可用 `CHROME_PATH` 指定；`DSH_E2E_CHROME_PA
 
 ### tarball：`npm run test:tarball`
 
-`tests/e2e/tarball.e2e.mjs` 构建 → `npm pack` → 装进全新临时 profile，核对打包清单（当前 27 个文件）、`lib/client.js`、插件层与接口可用。对应 README 的方式 B（Release 安装），验证“用户实际装到的包”。
+`tests/e2e/tarball.e2e.mjs` 构建 → `npm pack` → 装进全新临时 profile，核对打包清单（当前 28 个文件）、`lib/client.js`、插件层与接口可用。对应 README 的方式 B（Release 安装），验证“用户实际装到的包”。
 
 ### 可选的真实链路
 
@@ -103,6 +109,7 @@ Chrome 默认取 macOS 路径，可用 `CHROME_PATH` 指定；`DSH_E2E_CHROME_PA
 | `CHROME_PATH` | 页面测试用的 Chrome 可执行文件 |
 | `DSH_E2E_CHROME_PATH` | CI 上给页面测试用的 Chrome 路径 |
 | `DSH_E2E_REQUIRED=1` | 把 SKIP 变成失败（CI 使用） |
+| `DSH_E2E_PORT` | e2e 启动端口；桌面应用占用 3080 时改一个空闲端口 |
 | `DSH_TEST_MODULES` | 集成测试用的官方包目录 |
 | `DSH_E2E_REMOTE=1` / `DSH_E2E_REMOTE_URL` | 打开真实远程验收 / 换端点 |
 | `DSH_E2E_REAL_SOURCES=1` | 打开真实来源文件验收 |
@@ -113,6 +120,7 @@ Chrome 默认取 macOS 路径，可用 `CHROME_PATH` 指定；`DSH_E2E_CHROME_PA
 npm test && npm run check && npm run build
 npm run test:e2e
 npm run test:registry
+npm run test:oauth
 npm run test:ui
 npm run test:simulated
 npm run test:layout
@@ -122,14 +130,14 @@ DSH_E2E_REMOTE=1 npm run test:remote
 DSH_E2E_REAL_SOURCES=1 npm run test:real-sources
 ```
 
-接口、Registry、页面、模拟、布局五类都默认占用 `127.0.0.1:3080`，**必须串行**跑，不要并行。
+接口、Registry、OAuth、页面、模拟、布局六类都默认占用 `127.0.0.1:3080`；本机桌面应用在跑时可用 `DSH_E2E_PORT` 换端口，**必须串行**跑，不要并行。
 
 ## 常见问题
 
 - **SKIP 还是失败？** 默认没装 `dsh` / Chrome 就 SKIP 并以 0 退出；CI 设 `DSH_E2E_REQUIRED=1` 后同样的环境问题会失败。本地要确认“确实跑过”，也设这个变量。
 - **`npm pack` 在本地失败**：某些环境 `~/.npm/_logs` 不可写，给 `npm pack --dry-run --json --ignore-scripts --cache /tmp/npm-cache-mcphub`。
 - **页面测试找不到按钮**：先看 `tests/e2e/artifacts/` 的截图；多半是构建产物过期，重新 `npm run build`。
-- **端口被占**：确认没有另一个 e2e 或 `npm run dev` 在同机运行。
+- **端口被占**：确认没有另一个 e2e 或 `npm run dev` 在同机运行；桌面 DSH 自己占 3080 时用 `DSH_E2E_PORT=3207`。
 - **真实来源测试没结果**：它只扫真实 home；`DSH_HOME` 指向别处不影响。装了客户端但没配过 MCP，也会没有服务。
 
 ## 写新测试

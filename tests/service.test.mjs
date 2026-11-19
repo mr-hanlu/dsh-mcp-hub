@@ -351,7 +351,7 @@ test('export omits credentials by default and includes them only on request',asy
 test('API uses official owner-only Fetch routes for browser and desktop',()=>{
   const routes=[];
   apply({inject:()=>{},effect:fn=>fn(),connection:{fetch:{register:route=>{routes.push(route);return ()=>{};}}}});
-  assert.equal(routes.length,16);assert.ok(routes.every(route=>route.path.startsWith('/api/dsh-mcp-hub/')));
+  assert.equal(routes.length,19);assert.ok(routes.every(route=>route.path.startsWith('/api/dsh-mcp-hub/')));
   assert.deepEqual(routes.find(route=>route.path.endsWith('/mutate')).methods,['POST']);
   assert.deepEqual(routes.find(route=>route.path.endsWith('/servers')).methods,['GET']);
   assert.deepEqual(routes.find(route=>route.path.endsWith('/wait')).methods,['POST']);

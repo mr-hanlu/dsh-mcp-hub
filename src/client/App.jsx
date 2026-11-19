@@ -355,6 +355,7 @@ function formatDate(value) {
 
 function Editor({ draft, request, revision, reloadRevision, onClose, onSaved, existing = [] }) {
   const [formName, setFormName] = useState(draft.name ?? '');
+  const [formAuth, setFormAuth] = useState(draft.auth ?? 'token');
   const [formEntry, setFormEntry] = useState(() => structuredClone(draft.entry ?? blank()));
   const [formChecks, setFormChecks] = useState([]);
   const [formVariables, setFormVariables] = useState([]);
@@ -547,6 +548,7 @@ function Editor({ draft, request, revision, reloadRevision, onClose, onSaved, ex
         originalName: original,
         revision: currentRevision.current,
         acceptUnsupported: formAccept,
+        auth: formAuth,
         mode: original && formEntry.enabled === false ? 'draft' : undefined,
       };
       const result = await retryWhileCleaning(() => request(action === 'check' ? '/test' : '/mutate', body));
@@ -764,7 +766,7 @@ function Editor({ draft, request, revision, reloadRevision, onClose, onSaved, ex
             <Arguments value={formEntry.args} onChange={value => edit('args', value)} onReveal={reveal}/>
             <label className="hub-field">工作目录 <span className="hub-optional">可选</span><input value={formEntry.cwd ?? ''} onChange={event => edit('cwd', event.target.value)} placeholder="留空由 DSH 决定"/><small>本地命令的运行目录；命令或参数使用相对路径时填写，例如项目根目录。留空则继承 DSH 当前目录。</small></label>
             <Pairs label="环境变量" field="env" value={formEntry.env} variables={formVariables} onReveal={reveal} peeks={peeks} onPeek={peek} onCopy={copy} onTestRenew={testRenew} now={peekClock} onChange={value => edit('env', value)}/>
-          </> : <><label className="hub-field">服务地址<input value={formEntry.url ?? ''} onChange={event => edit('url', event.target.value)} placeholder="https://example.com/mcp"/><small>地址中的凭证已隐藏，修改地址时请填写完整新地址。</small></label><Pairs label="请求头" field="headers" value={formEntry.headers} variables={formVariables} onReveal={reveal} peeks={peeks} onPeek={peek} onCopy={copy} onTestRenew={testRenew} now={peekClock} onChange={value => edit('headers', value)}/></>}
+          </> : <><label className="hub-field">服务地址<input value={formEntry.url ?? ''} onChange={event => edit('url', event.target.value)} placeholder="https://example.com/mcp"/><small>地址中的凭证已隐藏，修改地址时请填写完整新地址。</small></label><div className="hub-field"><span className="hub-label">认证方式</span><div className="hub-auth-options"><label><input type="radio" name="hub-auth" checked={formAuth !== 'oauth'} onChange={() => setFormAuth('token')}/> 访问令牌或自定义请求头</label><label><input type="radio" name="hub-auth" checked={formAuth === 'oauth'} onChange={() => setFormAuth('oauth')}/> OAuth 登录（浏览器授权）</label></div>{formAuth === 'oauth' && <p className="hub-hint">保存后点击列表里的「授权」。浏览器登录完成后，访问令牌会写入 DSH 凭证服务，Authorization 请求头由插件维护。</p>}</div>{formAuth !== 'oauth' && <Pairs label="请求头" field="headers" value={formEntry.headers} variables={formVariables} onReveal={reveal} peeks={peeks} onPeek={peek} onCopy={copy} onTestRenew={testRenew} now={peekClock} onChange={value => edit('headers', value)}/>}</>}
           {!!formIssues.length && <div className="hub-compatibility"><strong>有配置需要核对</strong><ul>{formIssues.map(issue => <li key={issue}>{issue}</li>)}</ul><label><input type="checkbox" checked={formAccept} onChange={event => setFormAccept(event.target.checked)}/>我已核对，确认不迁移上述不支持的字段</label></div>}
         </>}
       </fieldset>
@@ -807,7 +809,7 @@ function ServerRow({ server, busy, detail, detailLoading, onLoadTools, onEdit, o
   return <article className={'hub-server ' + (open ? 'expanded' : '')}>
     <div className="hub-server-top"><button type="button" className="hub-expand-button" aria-expanded={open} aria-label={(open ? '收起 ' : '展开 ') + name} onClick={() => setOpen(!open)}><Icon name="chevron" className={open ? 'rotated' : ''}/></button>
       <span className="hub-avatar">{name.slice(0, 1).toUpperCase()}</span><button type="button" className="hub-server-name" onClick={() => setOpen(!open)} aria-expanded={open}><strong>{name}</strong><span><Status status={status}/><Badge>{connected ? (status.toolCount ?? tools.length) : '—'} 个工具</Badge>{MANAGED[managed] && <Badge>{MANAGED[managed]}</Badge>}{!MANAGED[managed] && <Badge>{entry?.transport === 'stdio' ? 'stdio' : entry?.transport === 'streamable-http' ? 'HTTP' : '插件管理'}</Badge>}<span className="hub-origin">{source?.app}</span><StatusNote status={status} verification={verification}/></span></button>
-      <div className="hub-actions">{verifying && <IconButton icon="close" label={'取消验证 ' + name} disabled={busy} onClick={() => onAction('cancel', server)}/>}<IconButton icon="edit" label={'编辑 ' + name} disabled={!server.editable || busy} onClick={() => onEdit(server)}/><IconButton icon="refresh" label={'重启 ' + name} disabled={status.state === 'disabled' || !server.editable || busy} onClick={() => onAction('restart', server)}/><IconButton icon="trash" label={'删除 ' + name} className="danger" disabled={!server.removable || busy} onClick={() => onAction('remove', server)}/><button type="button" className="hub-switch" role="switch" aria-label={'启用 ' + name} aria-checked={entry?.enabled !== false && !!entry} disabled={!server.editable || busy} onClick={() => onAction('toggle', server)}><span/></button></div>
+      <div className="hub-actions">{server.oauth && ['needs-auth','failed'].includes(server.oauth.state) && <button type="button" className="hub-button primary hub-row-auth" disabled={busy} onClick={() => onAction('oauth', server)}>授权</button>}{verifying && <IconButton icon="close" label={'取消验证 ' + name} disabled={busy} onClick={() => onAction('cancel', server)}/>}<IconButton icon="edit" label={'编辑 ' + name} disabled={!server.editable || busy} onClick={() => onEdit(server)}/><IconButton icon="refresh" label={'重启 ' + name} disabled={status.state === 'disabled' || !server.editable || busy} onClick={() => onAction('restart', server)}/><IconButton icon="trash" label={'删除 ' + name} className="danger" disabled={!server.removable || busy} onClick={() => onAction('remove', server)}/><button type="button" className="hub-switch" role="switch" aria-label={'启用 ' + name} aria-checked={entry?.enabled !== false && !!entry} disabled={!server.editable || busy} onClick={() => onAction('toggle', server)}><span/></button></div>
     </div>
     {open && <div className="hub-server-details"><div className="hub-detail-tabs">{[['tools','工具'],['config','配置'],['diagnostics','诊断']].map(([id,label]) => <button type="button" key={id} className={id === detailTab ? 'active' : ''} onClick={() => setDetailTab(id)}>{label}{id === 'tools' && <small>{status.toolCount ?? tools.length}</small>}</button>)}</div>
       {detailTab === 'tools' && <div className="hub-tools"><div className="hub-detail-heading"><span>服务提供的工具</span>{rows.length > 3 && <input aria-label={'搜索 ' + name + ' 的工具'} value={query} onChange={event => setQuery(event.target.value)} placeholder="搜索工具…"/>}</div>{loading && <p className="hub-help" role="status"><i className="hub-spinner"/>正在读取工具参数…</p>}{!rows.length && !loading && <p className="hub-help">{connected ? '服务已连接，但没有返回工具；工具清单由保存后的正式连接重新获取，可在「诊断」中复诊。' : '服务连接成功后，这里将显示可用工具。'}</p>}{connected && !!rows.length && <p className="hub-help">工具清单来自保存后的正式连接，不沿用添加页的测试结果。</p>}{rows.filter(tool => (tool.name + tool.description).toLowerCase().includes(query.toLowerCase())).map(tool => <details className="hub-tool" key={tool.fullName ?? tool.name}><summary><Icon name="bolt" size={15}/><code>{tool.name}</code><Icon name="chevron" size={14}/></summary><p>{tool.description || '无描述'}</p>{tool.schema ? <pre>{JSON.stringify(tool.schema, null, 2)}</pre> : <p className="hub-help">展开后加载参数 Schema。</p>}</details>)}</div>}
@@ -1000,6 +1002,7 @@ export function App({ request = apiRequest, preview = false, locale }) {
   const [error, setError] = useState('');
   const [loadError, setLoadError] = useState('');
   const [notice, setNotice] = useState(null);
+  const [oauthLink, setOauthLink] = useState(null);
   const [noticePaused, setNoticePaused] = useState(false);
   const [deleteError, setDeleteError] = useState('');
   const [loading, setLoading] = useState(true);
@@ -1160,7 +1163,33 @@ export function App({ request = apiRequest, preview = false, locale }) {
       setError(textError(error));
     }
   }
+  async function cancelOAuthPrompt() {
+    const pending = oauthLink;
+    setOauthLink(null);
+    if (!pending) return;
+    try { await request('/oauth-cancel', { name: pending.name }); } catch {}
+  }
   async function action(action, server, confirmed = false) {
+    if (action === 'oauth') {
+      setBusy(server.name); setError('');
+      try {
+        const started = await request('/oauth-start', { name: server.name });
+        if (started?.state === 'authorized') { await refresh(true); return; }
+        setOauthLink({ name: server.name, url: started.url });
+        // The browser round trip ends on our loopback callback; poll the host until
+        // the grant lands (or the attempt gives up) so the list reflects reality.
+        for (let i = 0; i < 120; i += 1) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          const status = await request('/oauth-status', { name: server.name });
+          if (status.state === 'authorized') { notify(`已授权 ${server.name}，正在重新连接`); break; }
+          if (status.state === 'failed') { setError(status.error || 'OAuth 授权失败'); break; }
+          if (status.state === 'needs-auth') break;
+        }
+        await refresh(true);
+      } catch (error) { setError(textError(error)); }
+      finally { setOauthLink(null); setBusy(''); }
+      return;
+    }
     if (action === 'remove' && !confirmed) { setDeleteError(''); setConfirm(server); return; }
     if (action === 'cancel') {
       setBusy(server.name); setError('');
@@ -1223,13 +1252,14 @@ export function App({ request = apiRequest, preview = false, locale }) {
     <p className="hub-description">连接、管理你的 MCP 服务，把常用工具带到 DSH。</p>
     <nav className="hub-main-tabs" aria-label="MCP Hub 页面"><button type="button" aria-current={tab === 'installed' ? 'page' : undefined} className={tab === 'installed' ? 'active' : ''} onClick={() => setTab('installed')}><Icon name="box"/>已添加 <small>{servers.length}</small></button><button type="button" aria-current={tab === 'import' ? 'page' : undefined} className={tab === 'import' ? 'active' : ''} onClick={() => setTab('import')}><Icon name="import"/>本地导入</button><button type="button" aria-current={tab === 'catalog' ? 'page' : undefined} className={tab === 'catalog' ? 'active' : ''} onClick={() => setTab('catalog')}><Icon name="search"/>在线搜索</button></nav>
     {(error || loadError) && <div className="hub-banner bad" role="alert"><Icon name="info"/><span>{error || loadError}</span><button className="hub-text-button" onClick={() => { setError(''); refresh().catch(() => {}); }}>重试</button></div>}
+    {oauthLink && <div className="hub-banner" role="status"><Icon name="info"/><span>{oauthLink.name} 等待浏览器授权：请在打开的页面完成登录。</span><a className="hub-text-button" href={oauthLink.url} target="_blank" rel="noopener noreferrer">打开授权页面</a><button className="hub-text-button" onClick={cancelOAuthPrompt}>取消授权</button></div>}
     {notice && <div className={'hub-toast ' + notice.tone} role="status" onMouseEnter={()=>setNoticePaused(true)} onMouseLeave={()=>setNoticePaused(false)} onFocus={()=>setNoticePaused(true)} onBlur={()=>setNoticePaused(false)}><Icon name={notice.tone === 'good' ? 'check' : 'info'}/><span>{notice.text}</span><IconButton icon="close" label="关闭通知" onClick={() => setNotice(null)}/></div>}
     <Boundary>
     {tab === 'catalog' ? <CatalogPanel request={request} onInstall={(install, option) => setDraft({ name: install.name, entry: option.entry, initialMode: 'form', source: '官方 MCP Registry', sourcePath: install.registryName, jsonText: JSON.stringify({ mcpServers: { [install.name]: option.entry } }, null, 2), jsonFormat: 'json' })}/> : tab === 'installed' ? <>
       <div className="hub-stats"><div><strong>{servers.length}</strong><span>个 MCP 服务</span></div><div><i className="good"/><strong>{connected}</strong><span>已连接</span></div><div><i className={failures ? 'bad' : 'muted'}/><strong>{failures}</strong><span>需要处理</span></div></div>
       <div className="hub-toolbar"><label className="hub-search"><Icon name="search"/><input aria-label="搜索已添加的 MCP" value={query} onChange={event => setQuery(event.target.value)} placeholder="搜索服务名称或来源…"/></label><select aria-label="筛选连接状态" value={filter} onChange={event => setFilter(event.target.value)}><option value="all">全部状态</option><option value="connected">已连接</option><option value="disabled">已停用</option><option value="failed">需要处理</option></select><div className="hub-bulk"><button className="hub-button" disabled={!!busy || !failures} onClick={restartFailed}><Icon name="refresh" size={15}/>重连异常项</button><button className="hub-button" disabled={!data} onClick={() => { setExportError(''); setExportOpen(true); }}>导出配置</button></div></div>
       <div className="hub-list-label"><span>服务</span><span>管理</span></div>
-      <div className="hub-server-list">{visible.map(server => <ServerRow key={server.name} server={server} busy={!!busy} detail={toolDetails[server.name]?.tools && { tools: toolDetails[server.name].tools }} detailLoading={Boolean(toolDetails[server.name]?.loading)} onLoadTools={loadTools} onEdit={server => setDraft({ name: server.name, entry: server.entry, originalName: server.name })} onAction={action}/>)}</div>
+      <div className="hub-server-list">{visible.map(server => <ServerRow key={server.name} server={server} busy={!!busy} detail={toolDetails[server.name]?.tools && { tools: toolDetails[server.name].tools }} detailLoading={Boolean(toolDetails[server.name]?.loading)} onLoadTools={loadTools} onEdit={server => setDraft({ name: server.name, entry: server.entry, originalName: server.name, auth: server.oauth ? 'oauth' : 'token' })} onAction={action}/>)}</div>
       {!visible.length && <div className="hub-empty"><Icon name="box" size={30}/><h2>{loading ? '正在读取服务…' : servers.length ? '没有匹配的服务' : '连接你的第一个 MCP'}</h2><p>{servers.length ? '试试其他名称或切换状态筛选。' : '手动添加服务，或从其他 AI 应用导入已有配置。'}</p>{!servers.length && !loading && <button className="hub-button" onClick={() => setTab('import')}><Icon name="import"/>从本机导入</button>}</div>}
     </> : <><div className="hub-file-import"><span>从其他应用导入已有 MCP</span><button className="hub-button" disabled={scanning} onClick={() => fileInput.current.click()}><Icon name="folder" size={16}/>选择配置文件</button><input type="file" hidden ref={fileInput} accept=".json,.jsonc,.toml" onChange={readConfigFile}/></div><Sources sources={sources} scanning={scanning} scanError={scanError} onScan={scan} onImport={candidate => setDraft({ ...candidate, candidateId: candidate.id })} onRemove={removeImportedSource}/></>}
     </Boundary>

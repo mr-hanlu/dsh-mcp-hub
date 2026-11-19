@@ -279,7 +279,7 @@ function commandPaths(command, { platform, searchPath, pathext }) {
  * @param platform - defaults to the running host; tests inject 'win32' to cover
  *   PATHEXT probing without a Windows machine.
  */
-export async function preflight(name, input, { env = process.env, home, cwd, checkAccess = access, checkStat = stat, referenceStorage = 'template', describeCredential, platform = process.platform } = {}) {
+export async function preflight(name, input, { env = process.env, home, cwd, checkAccess = access, checkStat = stat, referenceStorage = 'template', describeCredential, deferredCredentials = [], platform = process.platform } = {}) {
   assertEntryShape(input);
   const checks = [];
   // hard 检查即使在「保存为停用」时也必须通过：它们决定条目本身是否合法。
@@ -297,9 +297,9 @@ export async function preflight(name, input, { env = process.env, home, cwd, che
       if (info?.configured) { sources[key] = info; continue; }
       still.push(key);
     }
-    missing = still;
+    missing = still.filter(key => !deferredCredentials.includes(key));
   }
-  add('变量引用', !missing.length, missing.length ? '缺少变量：' + missing.join('、') : referenceStorage === 'value' ? '引用已解析；凭证引用将在正式连接时验证' : '将保存为 ${credential:…} 引用，由 DSH 凭证服务在连接时解析');
+  add('变量引用', !missing.length, missing.length ? '缺少变量：' + missing.join('、') : deferredCredentials.length ? 'OAuth 授权后写入，连接前无需手填' : referenceStorage === 'value' ? '引用已解析；凭证引用将在正式连接时验证' : '将保存为 ${credential:…} 引用，由 DSH 凭证服务在连接时解析');
   const invalidKeys = ['env','headers'].flatMap(field => Object.keys(entry[field] ?? {}).filter(key => !(field === 'env' ? KEY : /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/).test(key)));
   const emptySecrets = ['env','headers'].flatMap(field => Object.entries(entry[field] ?? {}).filter(([key,value]) => value === '' && (field === 'headers' || /token|secret|password|api_?key/i.test(key))).map(([key])=>key));
   add('变量与请求头名称', !invalidKeys.length, invalidKeys.length ? '名称无效：' + invalidKeys.join('、') : '名称有效', true);

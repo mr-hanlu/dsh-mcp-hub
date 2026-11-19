@@ -29,6 +29,7 @@ MCP 配置通常藏在十几个 JSON / TOML 文件里，改一个命令要翻目
 - **统一管理**：添加、编辑、改名、启停、重启、复诊、删除官方 Manager 中的服务；异常项一键重连。
 - **本机配置导入**：扫描 Claude Code / Claude Desktop、Codex、Gemini CLI、VS Code / Copilot、Copilot CLI、Windsurf、Cursor、OpenCode，兼容 TOML / JSON / JSONC 与桌面端、CLI、Server 变体。
 - **项目级发现**：读取启动目录下的 `.mcp.json`、`.cursor/mcp.json`、`.vscode/mcp.json` 等，导入时自动加名称后缀，避免跨项目重名。
+- **OAuth 登录**：为支持 OAuth 的远程服务内置发现、动态客户端注册与 PKCE 授权；令牌写入 DSH 凭证服务，授权后自动重连，并在过期前刷新。
 - **在线搜索**：查询官方 MCP Registry，选 npm / PyPI / OCI / 远程 HTTP 后预填编辑页；**不自动安装、不静默写入**。
 - **先测试再保存**：逐行测试、批量一次性写入；失败零写入，已存在同名服务自动跳过。
 - **后台验证**：保存即关闭窗口，连接与工具注册在后台完成；失败自动停用并保留原因，不把失败显示成成功。
@@ -114,7 +115,7 @@ dsh plugin --profile hub-dev add "$PWD"
 - 扫描只读取配置文件和检查访问权限，**不执行**里面的启动命令；
 - 不修改、不持续同步来源应用配置；导入是一次性复制；
 - 插件注册的服务只读，继承配置只能停用；不迁移其他 MCP 管理插件的数据；
-- 远程服务目前只支持静态 env / headers 与 DSH 凭证引用，**不含 OAuth 登录**；
+- 远程服务支持静态 env / headers、DSH 凭证引用与 OAuth 登录；单工具权限仍不在范围内。
 - 单工具权限管理与 Tool Search 不在本版本范围，界面不保留占位入口。
 
 ## 文档

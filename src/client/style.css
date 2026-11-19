@@ -419,3 +419,7 @@ html[data-ds-theme-source=light] body:has(.mcp-hub[data-preview=true]){backgroun
 .hub-catalog-entry-title{font-size:11px;font-weight:600;color:var(--hub-muted);margin:0 0 6px}
 .hub-catalog-entry pre{margin-top:7px;max-height:220px;font-size:10.5px}
 @media(max-width:720px){.hub-catalog-dialog{width:100%}.hub-catalog-card{align-items:stretch;flex-direction:column;gap:8px}.hub-catalog-card-actions{justify-content:flex-end}.hub-catalog-search{flex-wrap:wrap}.hub-catalog-search-box{flex-basis:100%}.hub-catalog-search>.hub-button{width:100%}}
+.hub-auth-options{display:flex;flex-wrap:wrap;gap:14px;font-size:13px}
+.hub-auth-options label{display:inline-flex;align-items:center;gap:6px;cursor:pointer}
+.hub-hint{margin:6px 0 0;font-size:12px;line-height:1.5;color:var(--dsw-alias-text-secondary,#6b7280)}
+.hub-row-auth{height:29px;padding:0 10px;font-size:12px}

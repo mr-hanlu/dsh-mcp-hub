@@ -74,7 +74,10 @@ export async function createProfile({ bin, repoRoot, name = 'e2e', template = 'w
 
 /** 启动 profile，返回带 token 的地址、会话 cookie，以及 stop()。 */
 export async function bootProfile({ bin, profile, env, extraArgs = ['--no-open'], probe = true }) {
-  const child = spawn(bin, ['--profile', profile, ...extraArgs], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+  // 本机桌面应用通常占用 3080；给测试留一个显式端口，CI 不设置时仍用默认值。
+  const args = ['--profile', profile, ...extraArgs];
+  if (process.env.DSH_E2E_PORT && !extraArgs.includes('--port')) args.push('--port', process.env.DSH_E2E_PORT);
+  const child = spawn(bin, args, { env, stdio: ['ignore', 'pipe', 'pipe'] });
   let output = '';
   const stopChild = () => { try { child.kill('SIGTERM'); } catch {} };
   try {
