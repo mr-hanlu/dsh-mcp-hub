@@ -2,10 +2,13 @@ import { build } from 'esbuild';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 
 await mkdir('lib', { recursive: true });
-const css = await readFile('src/client/style.css', 'utf8');
+// Build outputs are compared byte-for-byte in CI. Git on Windows may check the
+// sources out with CRLF, so normalize here instead of depending on autocrlf.
+const normalize = text => text.replace(/\r\n/g, '\n');
+const css = normalize(await readFile('src/client/style.css', 'utf8'));
 await build({ entryPoints: ['src/client/plugin.jsx'], bundle: true, platform: 'browser', format: 'cjs', external: ['react'], write: false, jsx: 'transform', loader: { '.css': 'text' } }).then(async result => {
   // DSH supplies React through its frozen module table, including jsx-runtime.
-  const code = result.outputFiles[0].text;
+  const code = normalize(result.outputFiles[0].text);
   await writeFile('lib/client.js', `window.__ModuleLoader__.load({id:'dsh-mcp-hub',factory(require){var module={exports:{}};var exports=module.exports;\n${code}\nreturn module.exports;}});`);
 });
 await build({ entryPoints: ['src/client/preview.jsx'], bundle: true, platform: 'browser', format: 'esm', outfile: 'dist/preview.js', jsx: 'transform' });
