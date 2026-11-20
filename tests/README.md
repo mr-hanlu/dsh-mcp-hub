@@ -23,7 +23,7 @@
 
 ## 单元测试
 
-`npm test` 直接跑 `tests/*.test.mjs`，用 Node 内置 `node:test` + `assert/strict`，不依赖测试框架。共 **159 项**。
+`npm test` 直接跑 `tests/*.test.mjs`，用 Node 内置 `node:test` + `assert/strict`，不依赖测试框架。共 **161 项**。
 
 | 文件 | 覆盖内容 |
 | --- | --- |
@@ -35,7 +35,7 @@
 | `i18n.test.mjs` | 中英词条、动态消息正则、占位符替换 |
 | `probe.test.mjs` | 缺变量时完全不启动进程；握手成功但清理未确认不算通过；可执行文件不是 MCP 时失败；`tools/list` 失败仍算“已连接、可添加” |
 | `servers.test.mjs` | 清理中的行不占用名称；`NAME_CLEANING` 自动重试；`takenNames` 边界 |
-| `service.test.mjs` | Host 服务主体（78 项）：后台验证与结算、首次连接双倍预算、失败自动停用、认证失败文案、取消验证、启停代次、批量导入一次 revision、重复名 / 冲突 / 零写入、撤销整批（接口能力）、密钥写入与 reveal、导出、清理行、官方 Manager 行边界、无凭证服务时的拒绝、验证中断态结算、非法端点快速失败、来源记录持久化 |
+| `service.test.mjs` | Host 服务主体（80 项）：后台验证与结算、首次连接双倍预算、失败自动停用、认证失败文案、取消验证、启停代次、批量导入一次 revision、重复名 / 冲突 / 零写入、撤销整批（接口能力）、密钥写入与 reveal、导出、清理行、官方 Manager 行边界、无凭证服务时的拒绝、验证中断态结算、非法端点快速失败、OAuth 401 转待授权且不自动停用、来源记录持久化 |
 | `sources.test.mjs` | 各客户端真实形状：Claude 项目级、Codex `CODEX_HOME` / `env_vars` / Bearer、OpenCode 环境变量覆盖、Gemini `httpUrl`、VS Code `type` / `envFile`、跨来源去重（连接身份而非名字） |
 
 ## 真实集成测试

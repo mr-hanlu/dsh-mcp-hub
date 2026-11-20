@@ -148,8 +148,7 @@ vite.config.ts.timestamp-*
 # Turbo Repo
 .turbo
 
-# MCP Hub local build artifacts
-lib/
+# MCP Hub 构建产物：lib/ 要入库，GitHub 源码安装才能加载页面；dist 仍忽略
 dist/
 *.DS_Store
 

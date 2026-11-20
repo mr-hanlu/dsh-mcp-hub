@@ -186,9 +186,15 @@ export class HubService {
     return provider;
   }
   /** What the page needs to render the right OAuth affordance, without secrets. */
-  oauthView(name) {
+  oauthView(name, status, entry) {
     const marker = this.oauth[name];
     if (!marker) return undefined;
+    // A 401 outside a verification (for example after a Host restart) still means
+    // the grant is gone; surface the same inline "授权" affordance.
+    if (marker.state === 'authorized' && status && (status.state === 'failed' || status.state === 'reconnecting')) {
+      const reason = this.safeError(diagnostic(status), entry ?? {});
+      if (AUTH_FAILURE.test(reason)) this.markOAuthNeedsAuth(name, '需要认证：' + reason);
+    }
     const attempt = this.oauthAttempts.get(name);
     const state = attempt && attempt.state !== 'authorized' ? attempt.state : marker.state ?? 'needs-auth';
     return {
@@ -545,7 +551,7 @@ export class HubService {
       // configured=false 表示条目已从配置移除、但实例仍在清理（官方会保留到宿主重启）。
       managed: owned ? (inherited ? 'inherited' : 'config') : live?.configured === false ? 'cleanup' : 'plugin',
       verification: this.verificationView(name),
-      oauth: this.oauthView(name),
+      oauth: this.oauthView(name, status, entry),
       editable: owned, removable: owned && !inherited,
       source: this.origins[name] ?? { app: owned ? 'DSH 配置' : live?.configured === false ? '已删除，清理中' : '插件注册' },
       tools, toolCount: tools.length,
@@ -1233,7 +1239,11 @@ export class HubService {
       if (!this.stillExpected(name, record.expected)) return this.finishVerification(record, 'failed', '验证期间配置已被修改，请刷新后查看最新状态');
       if (status.state === 'waiting-credentials') return this.finishVerification(record, 'failed', '缺少 DSH 凭证，请补全后重新验证');
       const reason = this.safeError(diagnostic(status), record.expected);
-      return this.finishVerification(record, 'failed', AUTH_FAILURE.test(reason) ? '需要认证：' + reason : reason);
+      if (AUTH_FAILURE.test(reason)) {
+        this.markOAuthNeedsAuth(name, '需要认证：' + reason);
+        return this.finishVerification(record, 'failed', '需要认证：' + reason);
+      }
+      return this.finishVerification(record, 'failed', reason);
     }
     // 客户端没有 needs-auth 状态：401/403 只出现在 lastError 文本里，而它会让实例一直重连到
     // 验证预算耗尽。识别到认证失败就立刻结算，不必让用户等 45 秒才知道是凭证问题。
@@ -1241,6 +1251,7 @@ export class HubService {
       const reason = this.safeError(diagnostic(status), record.expected);
       if (AUTH_FAILURE.test(reason)) {
         if (!this.stillExpected(name, record.expected)) return this.finishVerification(record, 'failed', '验证期间配置已被修改，请刷新后查看最新状态');
+        this.markOAuthNeedsAuth(name, '需要认证：' + reason);
         return this.finishVerification(record, 'failed', '需要认证：' + reason);
       }
       // 地址本身不可用（禁用端口、非法 URL、域名不存在）没有重试价值；立即给结论，
@@ -1274,13 +1285,24 @@ export class HubService {
     const current = this.descriptor({ fresh: true }).value?.servers?.[name];
     return Boolean(current) && includesConfig(current, expected);
   }
+  /** A 401 on an OAuth row means the grant is gone, not that the entry is broken. */
+  markOAuthNeedsAuth(name, detail) {
+    const marker = this.oauth?.[name];
+    if (!marker) return;
+    marker.state = 'needs-auth';
+    marker.error = detail;
+    this.persistMeta().catch(() => { this.ctx.logger?.warn?.('MCP Hub 无法写入授权状态'); });
+  }
   finishVerification(record, state, detail) {
     if (record.state !== 'verifying') return;
     this.statusWatchers.delete(record);
     if (!this.statusWatchers.size) this.stopVerificationTicker();
     Object.assign(record, { state, detail, finishedAt: Date.now() });
     this.recordVerification(record.name, { state, detail, startedAt: record.startedAt, finishedAt: record.finishedAt });
-    if (state === 'failed') void this.disableIfUnchanged(record.name, record.expected, record.startedAt);
+    // OAuth 的认证失败是预期状态，不是坏配置：保持启用，行内「授权」才能重新走一遍；
+    // 自动停用会让重连与重新授权后的验证都没有可用的运行实例。
+    const oauthAuthFailure = state === 'failed' && detail.startsWith('需要认证：') && Boolean(this.oauth[record.name]);
+    if (state === 'failed' && !oauthAuthFailure) void this.disableIfUnchanged(record.name, record.expected, record.startedAt);
     this.notify();
   }
   recordVerification(name, entry) {

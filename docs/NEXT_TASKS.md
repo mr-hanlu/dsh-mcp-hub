@@ -1,8 +1,8 @@
 # 后续任务
 
-更新日期：2026-11-19（Asia/Shanghai），**修订 r12**：OAuth 完成并准备 0.2.0 发布（发布产物改放仓库 `release/`，已忽略）。r11 修订内容为：完成 OAuth 协议核心——PRM / AS 发现、动态客户端注册、PKCE S256、本机回调、grant 记录、`${credential:…}` 引用与自动重连、临近过期刷新、删除清理；新增 `test:oauth`（8 步）与 `tests/oauth.test.mjs`（11 项），单测 159 项；编辑页增加认证方式，列表增加「授权」入口。r10 已收尾 P0（Windows 跨平台断言、永久性连接错误快速结算、`test:registry`）。
+更新日期：2026-11-20（Asia/Shanghai），**修订 r13**：0.2.0 已发布并被插件市场收录；OAuth 的 401 检测已收尾（认证失败自动把行标记为待授权并保持可重试，单测 161 项）。r12：OAuth 完成并准备 0.2.0 发布（发布产物改放仓库 `release/`，已忽略）。r11 修订内容为：完成 OAuth 协议核心——PRM / AS 发现、动态客户端注册、PKCE S256、本机回调、grant 记录、`${credential:…}` 引用与自动重连、临近过期刷新、删除清理；新增 `test:oauth`（8 步）与 `tests/oauth.test.mjs`（11 项），单测 159 项；编辑页增加认证方式，列表增加「授权」入口。r10 已收尾 P0（Windows 跨平台断言、永久性连接错误快速结算、`test:registry`）。
 
-当前基线：**0.2.0**，DSH 0.2.2-rc.5；单测 159 项、`test:e2e` 38 步、`test:registry` 7 步、`test:oauth` 8 步、`test:ui` 23 步、`test:simulated` 16 步、`test:layout` 4 图、打包清单 28 个文件。本文是后续工作清单，不代表这些问题均已复现为故障。源码现状和验证记录见 [开发进度](DEVELOPMENT_PROGRESS.md)；认证能力与分阶段计划见 [开发计划](DEVELOPMENT_PLAN_2026-11-17.md)；安装步骤见 [README](../README.md#安装)。
+当前基线：**0.2.0**，DSH 0.2.2-rc.5；单测 161 项、`test:e2e` 38 步、`test:registry` 7 步、`test:oauth` 8 步、`test:ui` 23 步、`test:simulated` 16 步、`test:layout` 4 图、打包清单 28 个文件。本文是后续工作清单，不代表这些问题均已复现为故障。源码现状和验证记录见 [开发进度](DEVELOPMENT_PROGRESS.md)；认证能力与分阶段计划见 [开发计划](DEVELOPMENT_PLAN_2026-11-17.md)；安装步骤见 [README](../README.md#安装)。
 
 ## P0：优先完成真实接入验收与边界处理
 
@@ -80,7 +80,7 @@
 
 ### 6. 接入 CI
 
-`.github/workflows/ci.yml` 已接入；本地基线先跑通（单测 159 项、`check`、`build`、`test:e2e` / `test:registry` / `test:oauth` / `test:ui` / `test:simulated` / `test:layout`、打包清单 28 个文件全部通过）。`checks` 同时在 `windows-latest` 与 `ubuntu-latest` 上跑，两者都是阻塞项。2026-11-19 修掉 Windows 上必然失败的 XDG 路径断言（`tests/sources.test.mjs` 改用 `[\\/]`）与 `~` 展开后的盘符断言后，Windows job 已在 `aceb0ec` 上真机跑绿，`continue-on-error` 已移除。
+`.github/workflows/ci.yml` 已接入；本地基线先跑通（单测 161 项、`check`、`build`、`test:e2e` / `test:registry` / `test:oauth` / `test:ui` / `test:simulated` / `test:layout`、打包清单 28 个文件全部通过）。`checks` 同时在 `windows-latest` 与 `ubuntu-latest` 上跑，两者都是阻塞项。2026-11-19 修掉 Windows 上必然失败的 XDG 路径断言（`tests/sources.test.mjs` 改用 `[\\/]`）与 `~` 展开后的盘符断言后，Windows job 已在 `aceb0ec` 上真机跑绿，`continue-on-error` 已移除。
 
 - [x] 基础流水线：`npm ci` → `npm test` → `npm run check` → `npm run build` → `npm pack --dry-run --json --ignore-scripts` 交给 `scripts/assert-pack.mjs` 断言包内容（`lib/client.js`、`lib/style.css`、`cordis.patch.yml`、`locale/`、`icon.svg`、`src/host`、`src/shared`、`README.md`、`LICENSE`），并断言复审报告不进包。这一层不需要 DSH，公开 runner 即可。
 - [x] 端到端流水线（需要装了 DSH 的机器）：`npm run test:e2e`、`npm run test:registry` 与 `npm run test:ui` 串行跑在一个带 `dsh` 标签的自托管 runner 上，由仓库变量 `DSH_E2E_RUNNER=true` 打开（未打开时整个 job 跳过，不会挂起）。CI 里设 `DSH_E2E_REQUIRED=1`，把「找不到 dsh / Chrome」从 SKIP 变成失败——否则 runner 没装 DSH 时会绿灯通过但什么都没测。
@@ -126,8 +126,10 @@
 - [x] 401/403 归类口径与「需要认证」兜底文案（沿用既有 `AUTH_FAILURE`）；OAuth 行在待授权时不启动空等验证。
 - [ ] 真实 Notion 账号验收（`https://mcp.notion.com/mcp`）：确认登录、回调、工具注册、重启免重授权、过期刷新。
 - [ ] 无 DCR 的服务（如 GitHub 预注册 App）支持手动填写 client id / secret。
-- [ ] 401 到期后自动触发重新授权（当前依赖用户在行上点「授权」）。
+- [x] 401 到期后自动把 OAuth 行标记为待授权并保持可重试（2026-11-20）：验证中与重启后的认证失败都会转 `needs-auth`，不自动停用，行内「授权」可重新走一遍；浏览器仍由用户点击后由宿主打开，避免无手势弹窗。
+- [ ] 401 后自动开始授权流程（无需用户再点「授权」）。
 - [ ] 对其他应用私有凭据明确提示重新授权；不假定复制配置等于复制登录状态。
+- [x] GitHub 源码安装可用（2026-11-20）：`lib/` 构建产物入库，`github:mr-hanlu/dsh-mcp-hub` 不再缺前端；CI 增加「构建后 `lib/` 无差异」检查。
 
 ### 打包与版本边界
 
@@ -153,12 +155,12 @@
 
 ## 下一次开发的建议顺序
 
-截至 2026-11-20（r11）：安装、Host 侧验收、`test:e2e`（38 步，含宿主重启恢复、阶段 4/5 与非法端点快速失败）、`test:registry`（7 步，本地假 Registry）、`test:oauth`（7 步，本地假授权服务器）、`test:ui`（23 步）、`test:simulated`（九种客户端 + 各种密钥写法）、`test:layout`（浅色/深色/窄窗口）、CI（Ubuntu + Windows 均阻塞）、启停后重新验证、密钥统一写入 DSH 凭证服务、行内查看/复制/编辑密钥、删除后清理期同名重加、来源兼容矩阵、Windows 命令探测、无凭证服务与官方 Manager 行边界、删除后重新导入 / 外部配置变更 / 并发保存 / 验证中关闭 / 卸载后 404、桌面人工项都已完成；`test:tarball`、`test:remote`、`test:real-sources` 三个可选验收也已跑通；本地基线全绿（单测 159 项、`check`、`build`、六条端到端脚本、打包清单 28 个文件）。
+截至 2026-11-20（r11）：安装、Host 侧验收、`test:e2e`（38 步，含宿主重启恢复、阶段 4/5 与非法端点快速失败）、`test:registry`（7 步，本地假 Registry）、`test:oauth`（8 步，本地假授权服务器）、`test:ui`（23 步）、`test:simulated`（九种客户端 + 各种密钥写法）、`test:layout`（浅色/深色/窄窗口）、CI（Ubuntu + Windows 均阻塞）、启停后重新验证、密钥统一写入 DSH 凭证服务、行内查看/复制/编辑密钥、删除后清理期同名重加、来源兼容矩阵、Windows 命令探测、无凭证服务与官方 Manager 行边界、删除后重新导入 / 外部配置变更 / 并发保存 / 验证中关闭 / 卸载后 404、桌面人工项都已完成；`test:tarball`、`test:remote`、`test:real-sources` 三个可选验收也已跑通；本地基线全绿（单测 161 项、`check`、`build`、六条端到端脚本、打包清单 28 个文件）。
 
 1. 复现基线：`npm ci && npm test && npm run check && npm run build`，再**串行**跑 `npm run test:e2e`、`npm run test:registry` 与 `npm run test:ui`（e2e / ui 各约 1–2 分钟且都默认占 `127.0.0.1:3080`，并行会 EADDRINUSE）。推送后确认 CI 的 checks 作业（Ubuntu 与 Windows 均为阻塞项）。要跑端到端按 README「持续集成」挂 runner。
 2. 补齐 P0-2 的真实来源样本（Windsurf / Cursor / Copilot 装好后跑 `test:real-sources`）与 P0-3 的两处真实边界（首次 npx 下载、清理失败案例）。
 3. 桌面实例再确认一次 Windows / Linux 上的安装与目录行为（目前只有 macOS 实机与 Windows 单元测试）。
-4. OAuth 收尾（2026-11-20 协议核心已落地）：用 Notion 真实账号跑一遍人工验收；再评估无 DCR 服务的手填 client id 与 401 自动重新授权。
+4. OAuth 收尾（2026-11-20 协议核心已落地）：用 Notion 真实账号跑一遍人工验收；再评估无 DCR 服务的手填 client id 与「401 后无需点击即自动开始授权」。
 
 ## 提交与发布约定
 

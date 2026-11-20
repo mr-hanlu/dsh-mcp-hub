@@ -72,6 +72,28 @@ test('an auth failure is reported as needing authentication instead of a timeout
   assert.match(record.detail,/^需要认证/);
   assert.match(record.detail,/401/);
 });
+test('an OAuth row that loses its grant stays enabled and asks for authorization again',async()=>{
+  // 401 对 OAuth 行是令牌过期，不是坏配置：自动停用会让重新授权后没有可用实例。
+  const status={state:'reconnecting',attempt:1,maxAttempts:10,nextRetryAtMs:Date.now()+1000,lastError:'Error POSTing to endpoint (HTTP 401): {"error":"invalid token"}'};
+  const {service,form}=fixture({servers:{demo:{...body.entry,enabled:true}},status});
+  service.oauth.demo={ref:'MCPHUB_DEMO_ACCESS_TOKEN',key:'dsh-mcp-hub/oauth-demo',state:'authorized'};
+  const record={name:'demo',state:'verifying',startedAt:Date.now()-10,deadline:Date.now()+5000,expected:form.value.servers.demo};
+  service.statusWatchers.add(record);
+  service.evaluateVerification(record,{runtime:[{name:'demo',configured:true,status}],schemas:[]});
+  assert.equal(record.state,'failed');assert.match(record.detail,/^需要认证/);
+  assert.equal(service.oauth.demo.state,'needs-auth');
+  assert.equal(form.value.servers.demo.enabled,true,'OAuth 认证失败不该自动停用');
+  await settle();
+  const [row]=(await service.list()).servers;
+  assert.equal(row.oauth.state,'needs-auth');
+});
+test('a 401 seen after a restart marks an OAuth row for authorization again',async()=>{
+  const {service}=fixture({servers:{demo:{...body.entry,enabled:true}},status:{state:'failed',reason:'auth',lastError:'Error POSTing to endpoint (HTTP 401): invalid token'}});
+  service.oauth.demo={ref:'MCPHUB_DEMO_ACCESS_TOKEN',key:'dsh-mcp-hub/oauth-demo',state:'authorized'};
+  const [row]=(await service.list()).servers;
+  assert.equal(row.oauth.state,'needs-auth');
+  assert.match(row.oauth.error,/401/);
+});
 test('an unreachable endpoint is settled instead of retrying until the budget runs out',async()=>{
   // 禁用端口/不存在的域名会被客户端当成可重试错误，重连到预算耗尽；应立刻给出结论。
   const {service}=fixture({waitMs:1000,status:{state:'reconnecting',attempt:1,maxAttempts:10,nextRetryAtMs:Date.now()+1000,lastError:'TypeError: fetch failed, cause: bad port'}});

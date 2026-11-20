@@ -51,9 +51,9 @@ MCP 配置通常藏在十几个 JSON / TOML 文件里，改一个命令要翻目
 
 在 DSH 的 **插件页 → 市场** 搜索 **dsh-mcp-hub**，安装后打开 **设置 → MCP Hub**。
 
-条目已提交收录，审核期间可能还搜不到；搜不到时用方式 B。
+条目已于 2026-11-19 收录。如果本机市场缓存里还没有，重启 DSH 后再搜，或改用方式 B。
 
-### 方式 B：Release 安装（当前推荐）
+### 方式 B：Release 安装（手动 / 离线）
 
 1. 下载 [dsh-mcp-hub.tgz](https://github.com/mr-hanlu/dsh-mcp-hub/releases/latest/download/dsh-mcp-hub.tgz)；
 2. 桌面应用：**插件 → 添加插件** → 选择这个 `.tgz` 文件（或填入它的绝对路径）；
@@ -92,7 +92,7 @@ dsh plugin --profile hub-dev add "$PWD"
 
 > **npm 上的 `dsh-mcp-hub` 是他人占位包，不是本项目。** 不要用 `dsh plugin add dsh-mcp-hub` 按包名安装。
 >
-> **不要用 `github:mr-hanlu/dsh-mcp-hub` 源码安装**：构建产物 `lib/` 不在仓库里，源码安装会缺 `lib/client.js`，插件页显示不出来。请用方式 A 或 B。
+> **GitHub 源码安装是 DSH 官方支持的安装方式，本仓库也可以。** 插件页的「添加插件」接受 npm 包、本地路径、Git 地址和 tarball；Git 地址会按 pnpm 的 git 依赖安装，DSH 安装前还会用 `git ls-remote` 检查仓库。本仓库已把 `lib/` 构建产物一起提交，所以 `github:mr-hanlu/dsh-mcp-hub` 能加载完整的设置页。源码安装不会自动更新，升级仍建议用市场或 tarball；如果你是改源码的人，先 `npm run build`，再把 `lib/` 一起提交，否则安装后的页面会缺前端。
 
 ### 装好后确认
 

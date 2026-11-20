@@ -47,6 +47,10 @@ jobs:
       - name: 构建浏览器模块
         run: npm run build
 
+      - name: 校验 lib/ 与源码一致
+        # lib/ 会随源码一起提交（GitHub 源码安装依赖它）；构建后必须没有差异。
+        run: test -f lib/client.js && git diff --exit-code -- lib
+
       - name: 生成打包清单
         # --ignore-scripts：build 已在上一跑过，这里只要纯 JSON 输出（prepack 的日志会污染 stdout）。
         run: npm pack --dry-run --json --ignore-scripts > pack.json
@@ -83,6 +87,10 @@ jobs:
 
       - name: 构建浏览器模块
         run: npm run build
+
+      - name: 校验 lib/ 与源码一致
+        # lib/ 会随源码一起提交（GitHub 源码安装依赖它）；构建后必须没有差异。
+        run: test -f lib/client.js && git diff --exit-code -- lib
 
       - name: 接口层端到端
         # DSH_E2E_REQUIRED=1：找不到 dsh 时不能 SKIP 成绿灯。

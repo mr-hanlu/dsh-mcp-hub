@@ -51,9 +51,9 @@ Installing does not require Node or npm. Those are only needed to build, test or
 
 Open **Plugins → Market**, search for **dsh-mcp-hub**, install, then open **Settings → MCP Hub**.
 
-The listing has been submitted and is under review; if it does not show up yet, use Option B.
+The listing was accepted on 2026-11-19. If your local market cache does not show it yet, restart DSH or use Option B.
 
-### Option B: Release archive (current recommendation)
+### Option B: Release archive (manual / offline)
 
 1. Download [dsh-mcp-hub.tgz](https://github.com/mr-hanlu/dsh-mcp-hub/releases/latest/download/dsh-mcp-hub.tgz);
 2. Desktop app: **Plugins → Add plugin** → select the `.tgz` file (or paste its absolute path);
@@ -92,7 +92,7 @@ A local directory is a **link install**: after editing code, run `npm run build`
 
 > **The npm package named `dsh-mcp-hub` belongs to someone else.** Do not install this project with `dsh plugin add dsh-mcp-hub`.
 >
-> **Do not install from GitHub source** (`github:mr-hanlu/dsh-mcp-hub`): the build output `lib/` is not committed, so a source install has no `lib/client.js` and the plugin page stays empty. Use Option A or B.
+> **GitHub source install is officially supported by DSH, and this repository supports it too.** The Plugins page accepts npm packages, local paths, Git URLs and tarballs; a Git URL is installed as a pnpm git dependency, and DSH checks the repository with `git ls-remote` first. This repository commits the `lib/` build output, so `github:mr-hanlu/dsh-mcp-hub` loads the full Settings page. Source installs do not auto-update; prefer the market or a tarball for upgrades. If you change the source, run `npm run build` and commit `lib/` too, otherwise the installed page will miss its frontend.
 
 ### Check that it works
 
