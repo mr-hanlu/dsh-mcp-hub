@@ -1,2 +1,5 @@
+# 源码与构建产物统一 LF：Windows 检出若变成 CRLF，构建产物会带 CRLF，CI 的 lib 对比会失败
+* text=auto eol=lf
+
 # 构建产物按字节校验（CI 会对比构建后的 lib/），禁止 Git 做换行转换
 lib/** -text
